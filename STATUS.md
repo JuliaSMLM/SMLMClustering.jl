@@ -6,7 +6,7 @@
 
 ## Current State
 
-All three active backends (`DBSCANConfig`, `HierarchicalConfig`, `VoronoiConfig`) are working end-to-end with full documentation. `README.md` covers the entry point, all three backends with examples, the `ClusterInfo` field table, and shared config fields. `api_overview.md` provides LLM-parseable API reference for all public exports. Full test suite is **159/159 passing in 28.6 s**. Three OPEN questions remain for Keith: the `cluster` vs `cluster!` naming convention (Q3), whether `ClusterInfo.cluster_sizes` should track dataset provenance (Q4), and the Ward-linkage + `cut_nm` unit mismatch on `HierarchicalConfig` (Q5). The package is feature-complete for the 1.0 lineup pending the GitHub push (Priority 7, blocked on Keith creating the org repo) and resolution of Q3/Q4/Q5.
+All three active backends (`DBSCANConfig`, `HierarchicalConfig`, `VoronoiConfig`) are working end-to-end with full documentation. `README.md` covers the entry point, all three backends with examples, the `ClusterInfo` field table, and shared config fields. `api_overview.md` provides LLM-parseable API reference for all public exports. Full test suite is **159/159 passing in 28.6 s**. Three OPEN questions remain for Keith: the `cluster` vs `cluster!` naming convention (Q3), whether `ClusterInfo.cluster_sizes` should track dataset provenance (Q4), and the Ward-linkage + `cut_nm` unit mismatch on `HierarchicalConfig` (Q5); @analysis's consumer-side perspective is now recorded in-line on each item. The package is feature-complete for the 1.0 lineup pending the GitHub push (Priority 7, blocked on Keith creating the org repo) and resolution of Q3/Q4/Q5. A Stop Condition now halts autonomous rounds until one of those blockers moves.
 
 ---
 
@@ -49,6 +49,7 @@ All three active backends (`DBSCANConfig`, `HierarchicalConfig`, `VoronoiConfig`
 | 006 | Distances.pairwise replacement | sonnet | done | _pairwise_distances → one-liner via Distances.pairwise; Distances dep explicit; 157/157 pass |
 | 007 | Voronoi duplicate-coordinate guard | sonnet | done | ArgumentError before triangulate on exact-coincident (x,y) pairs; 159/159 pass |
 | 008 | API overview + README | sonnet | done | README.md rewritten; api_overview.md created; 159/159 pass; package feature-complete pending GitHub push |
+| 009 | Idle close + surface @analysis Q3-Q5 input + add Stop Condition | opus | done | No unblocked priorities; @analysis consumer perspective inlined on Q3/Q4/Q5; Stop Condition halts autonomous rounds until Keith unblocks |
 
 ---
 
@@ -56,7 +57,7 @@ All three active backends (`DBSCANConfig`, `HierarchicalConfig`, `VoronoiConfig`
 
 <!-- Halt Phase 2 before any work if any of these are met. Add a line to halt autonomous operation without touching the lock. -->
 
-- (none)
+- All unblocked priorities DONE as of Round 009. Remaining work gated on external actions only: Keith to answer Q3/Q4/Q5, Keith to create the `JuliaSMLM/SMLMClustering.jl` org repo (Priority 7), and a lightweight Julia HDBSCAN library to appear (Priority 3/6 via D1). Remove this line when any of those move — autonomous rounds resume at that point. Also clearable if Keith wants to route a `/review-code` or audit round manually.
 
 <!-- Examples:
 - `Test suite broken on main branch (block all rounds until fixed)`
