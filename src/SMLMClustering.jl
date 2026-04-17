@@ -20,6 +20,7 @@ module SMLMClustering
 
 using SMLMData
 using Clustering
+using Distances
 
 export AbstractClusterConfig, ClusterInfo, cluster,
        DBSCANConfig, HierarchicalConfig, VoronoiConfig

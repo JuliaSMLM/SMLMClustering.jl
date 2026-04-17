@@ -5,7 +5,7 @@
 # writes per-emitter cluster labels into `emitter.id` (0 = noise, 1..K = cluster)
 # and returns `(smld_out, ClusterInfo)`.
 #
-# Shared helpers (_coords_matrix, _pairwise_distances) are provided by utils.jl,
+# Shared helpers (_coords_matrix, _group_by_dataset, etc.) are provided by utils.jl,
 # which is included before the backend files.
 
 """

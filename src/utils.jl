@@ -29,24 +29,7 @@ function _coords_matrix(emitters::AbstractVector{<:SMLMData.AbstractEmitter}, us
 end
 
 # Symmetric n×n pairwise Euclidean distance matrix from a d×n column-major matrix.
-function _pairwise_distances(X::Matrix{Float64})
-    d, n = size(X)
-    D = Matrix{Float64}(undef, n, n)
-    @inbounds for j in 1:n
-        D[j, j] = 0.0
-        for i in (j + 1):n
-            dist = 0.0
-            for k in 1:d
-                diff = X[k, i] - X[k, j]
-                dist += diff * diff
-            end
-            dist = sqrt(dist)
-            D[i, j] = dist
-            D[j, i] = dist
-        end
-    end
-    D
-end
+_pairwise_distances(X::Matrix{Float64}) = Distances.pairwise(Euclidean(), X; dims=2)
 
 # Group emitter indices by dataset (sorted, deterministic). When
 # per_dataset=false, returns a single all-indices group so downstream code
