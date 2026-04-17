@@ -53,6 +53,18 @@
 **Evidence:** Round 002 `DBSCANConfig.eps_nm=100.0` correctly clusters at 100 nm on emitters with microscale coordinates. The `_nm` suffix makes the unit explicit at the call site so users don't accidentally pass microns. SMLMData's emitter docstrings state microns; Clustering.jl is unit-agnostic (takes a `Real` radius), so the conversion must live in our backend.
 **Scope:** Every distance-valued config field names the unit in its suffix; backend code performs the conversion.
 
+### V7 — Voronoi backend is 2D-only; `use_3d=true` raises `ArgumentError`
+
+**Decision:** `VoronoiConfig` does not implement 3D clustering. `cluster(smld, cfg::VoronoiConfig)` throws `ArgumentError` when `cfg.use_3d == true`, with a message directing users to `DBSCANConfig` or `HierarchicalConfig` for 3D data. The other three backends' `use_3d=true` paths remain supported.
+**Evidence:** Round 004 adopted `DelaunayTriangulation.jl` for Voronoi tessellation; its 3D tessellation is not generally available, and every other pure-Julia Voronoi library (VoronoiCells.jl, VoronoiDelaunay.jl) is 2D only. Vendoring or building a 3D Voronoi from scratch is out of scope for a lightweight dep footprint (V4). Loud error prevents silent 2D fallback on 3D data.
+**Scope:** Applies only to `VoronoiConfig`; the shared `use_3d::Bool = false` field stays on all four configs for uniformity, but the Voronoi dispatch rejects `true`.
+
+### V8 — Voronoi density test: "dense" ⇔ cell area < mean / `density_factor`
+
+**Decision:** `VoronoiConfig` defines a localization as dense when its Voronoi cell area is **strictly less than** `mean_cell_area / density_factor`, where the mean is computed over the clipped tessellation within the group (per `per_dataset`). Dense localizations connected via the Delaunay adjacency graph form raw clusters; clusters with fewer than `min_points` members are relabeled noise and the remainder are renumbered compactly `1..K` within the group.
+**Evidence:** Round 004: three tight σ=10 nm blobs amid 60 scattered noise points are recovered as three clusters at `density_factor=2.0`; lowering `density_factor` below 1 inflates the threshold and absorbs most noise; raising `density_factor` shrinks the threshold and demands tighter packing. Matches the SR-Tesseler formulation (Levet et al., Nat Methods 2015). Polygons are clipped to the convex hull (`voronoi(tri; clip=true)`) so every generator has a finite area, with a documented caveat that hull cells are systematically smaller than their infinite-plane area.
+**Scope:** `VoronoiConfig` only. `density_factor > 0` is validated; `density_factor → 0` makes the threshold diverge (everything is "dense") and one giant component can form, while very large `density_factor` leaves few or no dense points.
+
 ---
 
 ## Dead Ends

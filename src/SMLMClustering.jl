@@ -21,11 +21,12 @@ module SMLMClustering
 using SMLMData
 
 export AbstractClusterConfig, ClusterInfo, cluster,
-       DBSCANConfig, HierarchicalConfig
+       DBSCANConfig, HierarchicalConfig, VoronoiConfig
 
 include("types.jl")
 include("utils.jl")
 include("backends/dbscan.jl")
 include("backends/hierarchical.jl")
+include("backends/voronoi.jl")
 
 end
