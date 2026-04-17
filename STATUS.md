@@ -6,7 +6,7 @@
 
 ## Current State
 
-Three of the four planned backends are working end-to-end: `DBSCANConfig`, `HierarchicalConfig`, and `VoronoiConfig`. The Voronoi backend now guards against exact-duplicate (x,y) coordinate inputs — `ArgumentError` is raised before triangulation rather than a cryptic `KeyError` from `get_area` (Priority 10 done in Round 007). Full test suite is **159/159 passing in 27.7 s**. Three OPEN questions remain for Keith: the `cluster` vs `cluster!` naming convention (Q3), whether `ClusterInfo.cluster_sizes` should track dataset provenance (Q4), and the Ward-linkage + `cut_nm` unit mismatch on `HierarchicalConfig` (Q5). The GitHub push (Priority 7) remains blocked on Keith creating the org repo. Next up is Priority 8: API overview + README.
+All three active backends (`DBSCANConfig`, `HierarchicalConfig`, `VoronoiConfig`) are working end-to-end with full documentation. `README.md` covers the entry point, all three backends with examples, the `ClusterInfo` field table, and shared config fields. `api_overview.md` provides LLM-parseable API reference for all public exports. Full test suite is **159/159 passing in 28.6 s**. Three OPEN questions remain for Keith: the `cluster` vs `cluster!` naming convention (Q3), whether `ClusterInfo.cluster_sizes` should track dataset provenance (Q4), and the Ward-linkage + `cut_nm` unit mismatch on `HierarchicalConfig` (Q5). The package is feature-complete for the 1.0 lineup pending the GitHub push (Priority 7, blocked on Keith creating the org repo) and resolution of Q3/Q4/Q5.
 
 ---
 
@@ -30,7 +30,7 @@ Three of the four planned backends are working end-to-end: `DBSCANConfig`, `Hier
 5. [MEDIUM] Implement `HierarchicalConfig` backend: shared fields + `cut_nm` threshold — DONE (Round 003)
 6. [MEDIUM] Test suite: one test file per backend covering clustering correctness on a known-label synthetic SMLD, per-dataset handling, and `remove_unclustered` behavior — IN PROGRESS (DBSCAN + Hierarchical + Voronoi covered; HDBSCAN pending a library)
 7. [HIGH] Push SMLMClustering to the `JuliaSMLM` GitHub org so SMLMAnalysis can pull it in via `[sources]` with `rev="main"`. @analysis's Q2 answer confirms the integration mode; @analysis is waiting on the URL + branch name. Needs Keith to create the repo under the org (external action) — TODO
-8. [LOW] API overview + README covering the four backends and the `(smld, ClusterInfo)` tuple convention — TODO
+8. [LOW] API overview + README covering the four backends and the `(smld, ClusterInfo)` tuple convention — DONE (Round 008)
 9. [MEDIUM] Replace hand-written `_pairwise_distances` in `src/utils.jl` with `Distances.pairwise(Euclidean(), X; dims=2)`. `Distances.jl` is already transitively available via Clustering.jl; adding it to `[deps]` is cheap. Gives BLAS-backed pairwise for the hierarchical backend on large groups. Source: Round 005 review I4 (AGREE-substantial). — DONE (Round 006)
 10. [MEDIUM] Guard Voronoi backend against duplicate-coordinate inputs. `DelaunayTriangulation.get_area` raises `KeyError` on exact-coincident generators; the current Voronoi path will crash rather than error cleanly. Either deduplicate before `triangulate` or wrap with `ArgumentError`. Add a regression test at `test/test_voronoi.jl` for duplicate coords. Source: Round 005 review I6 (AGREE-substantial). — DONE (Round 007)
 
@@ -48,6 +48,7 @@ Three of the four planned backends are working end-to-end: `DBSCANConfig`, `Hier
 | 005 | Review at Round 005 | opus | done | /review-code: trivial fixes applied (helpers, time_ns, show); I4+I6 as P9+P10; Q3/Q4/Q5 posted |
 | 006 | Distances.pairwise replacement | sonnet | done | _pairwise_distances → one-liner via Distances.pairwise; Distances dep explicit; 157/157 pass |
 | 007 | Voronoi duplicate-coordinate guard | sonnet | done | ArgumentError before triangulate on exact-coincident (x,y) pairs; 159/159 pass |
+| 008 | API overview + README | sonnet | done | README.md rewritten; api_overview.md created; 159/159 pass; package feature-complete pending GitHub push |
 
 ---
 
