@@ -136,6 +136,23 @@ using Random
         @test_throws ArgumentError cluster(smld, VoronoiConfig(use_3d = true))
     end
 
+    @testset "duplicate coordinates raise ArgumentError" begin
+        # Exact-coincident (x,y) generators cause DelaunayTriangulation.get_area
+        # to raise KeyError; we want a clean ArgumentError before triangulation.
+        pts = [(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1), (1.0, 1.0, 1),
+               (0.0, 0.0, 1)]  # duplicate of first point
+        smld = _make_2d_smld(pts; n_datasets = 1)
+        cfg = VoronoiConfig(density_factor = 2.0, min_points = 1, per_dataset = false)
+        @test_throws ArgumentError cluster(smld, cfg)
+
+        # Duplicate in a multi-dataset split: per_dataset=true means each dataset
+        # is processed independently, so the error fires per-group.
+        pts2 = [(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1), (0.0, 0.0, 1)]
+        smld2 = _make_2d_smld(pts2; n_datasets = 1)
+        cfg2 = VoronoiConfig(density_factor = 2.0, min_points = 1, per_dataset = true)
+        @test_throws ArgumentError cluster(smld2, cfg2)
+    end
+
     @testset "degenerate groups (<3 points) are all noise" begin
         # One dataset with only 2 points; Voronoi can't tessellate → all noise.
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 1.0, 1)]; n_datasets = 1)

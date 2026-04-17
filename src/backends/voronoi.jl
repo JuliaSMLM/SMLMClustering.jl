@@ -54,7 +54,9 @@ localizations.
 
 !!! note "Degenerate input"
     Groups with fewer than 3 points are tagged all-noise (a tessellation
-    requires at least 3 non-collinear points).
+    requires at least 3 non-collinear points). Groups containing exact-duplicate
+    (x,y) coordinate pairs raise `ArgumentError`; deduplicate input
+    localizations before calling `cluster`.
 
 # Example
 ```julia
@@ -102,6 +104,12 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::VoronoiConfig)
 
         sub = view(smld.emitters, idxs)
         pts = [(sub[j].x, sub[j].y) for j in 1:n]  # μm
+
+        # Exact-coincident generators cause get_area to raise KeyError.
+        length(unique(pts)) == n ||
+            throw(ArgumentError(
+                "VoronoiConfig: group of $n points contains duplicate (x,y) " *
+                "coordinates; deduplicate input localizations before calling cluster()."))
 
         tri = DelaunayTriangulation.triangulate(pts)
         vor = DelaunayTriangulation.voronoi(tri; clip = true)
