@@ -41,6 +41,18 @@
 **Evidence:** Matches SMLMBoxer / SMLMFrameConnection dep pattern. Keeps SMLMClustering usable as a pure algorithm package.
 **Scope:** Project.toml `[deps]` must not include SMLMAnalysis.
 
+### V5 — Config structs use `Base.@kwdef` with explicit defaults
+
+**Decision:** Concrete `*Config` structs are declared with `Base.@kwdef struct Foo <: AbstractClusterConfig ... end`. Required-by-user fields (e.g. `DBSCANConfig.eps_nm`) have no default; shared fields use the defaults agreed in V3 (`min_points=5`, `use_3d=false`, `per_dataset=true`, `remove_unclustered=false`).
+**Evidence:** Round 002 implemented `DBSCANConfig` this way. Keyword-only construction avoids positional-argument confusion as the shared-fields list grows across four backends, and the pattern composes cleanly with SMLMAnalysis's `const DBSCANConfig = SMLMClustering.DBSCANConfig` re-export (callers use `DBSCANConfig(eps_nm=50.0)` either way).
+**Scope:** All four backend config structs. The `use_3d`/`per_dataset`/`remove_unclustered` defaults should be identical across backends so callers can swap backends without surprise.
+
+### V6 — Distance units: configs take **nm**, emitter coords are **μm**
+
+**Decision:** Algorithm-specific distance fields on configs (`DBSCANConfig.eps_nm`, future `HierarchicalConfig.cut_nm`, etc.) are named with the `_nm` suffix and specified in nanometers. Emitter coordinates (`x`, `y`, `z`) on SMLMData emitter structs are in microns. Each backend converts internally via `radius_μm = eps_nm / 1000.0` before calling its underlying library.
+**Evidence:** Round 002 `DBSCANConfig.eps_nm=100.0` correctly clusters at 100 nm on emitters with microscale coordinates. The `_nm` suffix makes the unit explicit at the call site so users don't accidentally pass microns. SMLMData's emitter docstrings state microns; Clustering.jl is unit-agnostic (takes a `Real` radius), so the conversion must live in our backend.
+**Scope:** Every distance-valued config field names the unit in its suffix; backend code performs the conversion.
+
 ---
 
 ## Dead Ends

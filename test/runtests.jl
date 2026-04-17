@@ -27,10 +27,13 @@ struct _DummyClusterCfg <: AbstractClusterConfig end
     end
 
     @testset "cluster() abstract fallback errors" begin
-        # No backends are wired yet — the abstract fallback should refuse.
+        # The abstract fallback should refuse for any config subtype without a
+        # concrete `cluster` method — exercised via a dummy subtype here.
         cam = IdealCamera(1:8, 1:8, 0.1)
         smld = BasicSMLD(SMLMData.Emitter2DFit{Float64}[], cam, 1, 1, Dict{String,Any}())
         @test_throws ErrorException cluster(smld, _DummyClusterCfg())
     end
+
+    include("test_dbscan.jl")
 
 end

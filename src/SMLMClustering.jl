@@ -20,8 +20,10 @@ module SMLMClustering
 
 using SMLMData
 
-export AbstractClusterConfig, ClusterInfo, cluster
+export AbstractClusterConfig, ClusterInfo, cluster,
+       DBSCANConfig
 
 include("types.jl")
+include("backends/dbscan.jl")
 
 end
