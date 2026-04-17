@@ -35,5 +35,6 @@ struct _DummyClusterCfg <: AbstractClusterConfig end
     end
 
     include("test_dbscan.jl")
+    include("test_hierarchical.jl")
 
 end

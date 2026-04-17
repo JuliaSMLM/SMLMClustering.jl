@@ -4,8 +4,9 @@
 # Configuration subtypes `AbstractClusterConfig`; `cluster(smld, ::DBSCANConfig)`
 # writes per-emitter cluster labels into `emitter.id` (0 = noise, 1..K = cluster)
 # and returns `(smld_out, ClusterInfo)`.
-
-using Clustering
+#
+# Shared helpers (_coords_matrix, _pairwise_distances) are provided by utils.jl,
+# which is included before the backend files.
 
 """
     DBSCANConfig(; eps_nm, min_points=5, use_3d=false, per_dataset=true, remove_unclustered=false)
@@ -41,34 +42,6 @@ Base.@kwdef struct DBSCANConfig <: AbstractClusterConfig
     use_3d::Bool = false
     per_dataset::Bool = true
     remove_unclustered::Bool = false
-end
-
-# Build a d×n matrix of emitter coordinates in microns. `use_3d` requires
-# Emitter3DFit (or any emitter that has a :z field); callers get a clear error
-# otherwise.
-function _coords_matrix(emitters::AbstractVector{<:SMLMData.AbstractEmitter}, use_3d::Bool)
-    n = length(emitters)
-    if use_3d
-        isempty(emitters) || hasproperty(first(emitters), :z) ||
-            error("DBSCANConfig(use_3d=true) requires 3D emitters (e.g. Emitter3DFit); " *
-                  "got $(eltype(emitters)).")
-        X = Matrix{Float64}(undef, 3, n)
-        @inbounds for i in 1:n
-            e = emitters[i]
-            X[1, i] = e.x
-            X[2, i] = e.y
-            X[3, i] = e.z
-        end
-        return X
-    else
-        X = Matrix{Float64}(undef, 2, n)
-        @inbounds for i in 1:n
-            e = emitters[i]
-            X[1, i] = e.x
-            X[2, i] = e.y
-        end
-        return X
-    end
 end
 
 function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)

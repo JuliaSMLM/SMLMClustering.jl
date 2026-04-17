@@ -21,9 +21,11 @@ module SMLMClustering
 using SMLMData
 
 export AbstractClusterConfig, ClusterInfo, cluster,
-       DBSCANConfig
+       DBSCANConfig, HierarchicalConfig
 
 include("types.jl")
+include("utils.jl")
 include("backends/dbscan.jl")
+include("backends/hierarchical.jl")
 
 end

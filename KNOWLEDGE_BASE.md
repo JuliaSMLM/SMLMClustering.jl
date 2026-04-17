@@ -67,7 +67,12 @@
 **Workaround (if any):** <alternative>
 -->
 
-(none yet)
+### D1 — No lightweight registered Julia HDBSCAN library (as of 2026-04-17)
+
+**What was tried:** `Clustering.jl` 0.15.8 (already a dependency) — no `hdbscan` symbol. Julia General registry search — no registered HDBSCAN package. `baggepinnen/HDBSCAN.jl` (GitHub-only) — PyCall wrapper requiring Python `hdbscan`; Python not available in this environment. `HorseML.jl` (registered, 0.4.1) — has a pure Julia HDBSCAN implementation, but the package pulls in CUDA, NNlib, NNlibCUDA, and Zygote; adding it as a dep violates the lightweight algorithm-package constraint (V4).
+**Why it failed:** No registered Julia HDBSCAN package with acceptable dependency weight exists. `Clustering.jl` issue #139 tracks adding HDBSCAN but it has not merged as of v0.15.8.
+**Round reference:** round_003_hierarchical-backend.md
+**Workaround (if any):** (a) Wait for `Clustering.jl` to merge HDBSCAN (monitor issue #139). (b) Implement HDBSCAN from scratch using KNN + MST + hierarchy extraction (~300 lines, non-trivial). (c) Extract just the HDBSCAN source from `HorseML.jl` into a vendored file (check license). Option (a) is lowest risk; check again when `Clustering.jl` bumps past 0.15.8.
 
 ---
 

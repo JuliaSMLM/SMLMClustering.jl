@@ -6,10 +6,7 @@
 
 ## Current State
 
-<!-- One paragraph: what works end-to-end right now, what is in flight, what recent rounds established. -->
-<!-- Example: "Scalar PSF training validated at 98.4% accuracy on R044. Vector PSF model partially wired — forward pass works, training loop untested. Reactant backend default; Enzyme disabled pending upstream fix." -->
-
-Interface + first backend are working. `Project.toml` depends on `SMLMData v0.7` and `Clustering v0.15`. `src/types.jl` defines `AbstractClusterConfig <: SMLMData.AbstractSMLMConfig` and `ClusterInfo <: SMLMData.AbstractSMLMInfo`. `src/backends/dbscan.jl` defines `DBSCANConfig(eps_nm, min_points=5, use_3d=false, per_dataset=true, remove_unclustered=false)` and a specialized `cluster(smld, ::DBSCANConfig)` method that converts nm→μm, groups by dataset when requested, runs `Clustering.dbscan`, writes labels to `emitter.id` (0=noise, 1..K=cluster with per-dataset-local namespaces), and returns `(smld_out, ClusterInfo(:dbscan, ...))`. Full suite is 56/56 passing in 2.2 s and covers three-blob correctness, per-dataset namespace locality, `remove_unclustered` filtering, 3D dispatch, argument validation, and empty SMLDs. SMLMAnalysis's `const DBSCANConfig = SMLMClustering.DBSCANConfig` re-export is now safe. Next: HDBSCAN (Priority 3).
+Two backends are working end-to-end. `src/utils.jl` provides shared helpers (`_coords_matrix`, `_pairwise_distances`). `src/backends/dbscan.jl` implements `DBSCANConfig` (eps_nm, Clustering.dbscan). `src/backends/hierarchical.jl` implements `HierarchicalConfig` (cut_nm, linkage, agglomerative via `Clustering.hclust` + `cutree`, with `min_points` noise filtering). Full suite is 108/108 passing in 4.8 s. HDBSCAN (Priority 3) is BLOCKED: `Clustering.jl` 0.15.8 has no `hdbscan`, the only registered Julia HDBSCAN is in `HorseML.jl` (CUDA + NNlib + Zygote — too heavy), and the GitHub-only `baggepinnen/HDBSCAN.jl` requires Python. Next viable priority is Priority 4 (VoronoiConfig, MEDIUM).
 
 ---
 
@@ -26,23 +23,24 @@ Interface + first backend are working. `Project.toml` depends on `SMLMData v0.7`
 <!-- Ordered list. Severity tags [CRITICAL] | [HIGH] | [MEDIUM] | [LOW] optional. Status tags TODO | IN PROGRESS | BLOCKED | DONE. -->
 <!-- Human seeds these on init. Rounds reorder / update status / add discovered items, never silently drop. -->
 
-1. [HIGH] Scaffold package skeleton: add SMLMData dep to Project.toml, define `AbstractClusterConfig <: SMLMData.AbstractSMLMConfig`, define `ClusterInfo <: AbstractSMLMInfo` with fields `n_locs_in, n_clustered, n_noise, n_clusters, cluster_sizes::Vector{Int}, algorithm::Symbol, elapsed_s`, define the `cluster(smld::BasicSMLD, cfg::AbstractClusterConfig) -> (smld, ClusterInfo)` entry point with no backends wired yet — DONE (Round 001)
-2. [HIGH] Implement `DBSCANConfig` backend: shared fields (`min_points`, `use_3d`, `per_dataset`, `remove_unclustered`) + algorithm field (`eps_nm`); dispatch `cluster(smld, ::DBSCANConfig)` writing labels to `emitter.id` with per-dataset handling — DONE (Round 002)
-3. [HIGH] Implement `HDBSCANConfig` backend: same shared fields + `min_cluster_size` — TODO
+1. [HIGH] Scaffold package skeleton — DONE (Round 001)
+2. [HIGH] Implement `DBSCANConfig` backend — DONE (Round 002)
+3. [HIGH] Implement `HDBSCANConfig` backend: same shared fields + `min_cluster_size` — BLOCKED (no lightweight Julia HDBSCAN library; see D1 in KNOWLEDGE_BASE.md)
 4. [MEDIUM] Implement `VoronoiConfig` backend: density-based via Voronoi tessellation; shared fields + `density_factor` — TODO
-5. [MEDIUM] Implement `HierarchicalConfig` backend: shared fields + `cut_nm` threshold — TODO
-6. [MEDIUM] Test suite: one test file per backend covering clustering correctness on a known-label synthetic SMLD, per-dataset handling, and `remove_unclustered` behavior — IN PROGRESS (DBSCAN covered in Round 002; HDBSCAN/Voronoi/Hierarchical pending)
+5. [MEDIUM] Implement `HierarchicalConfig` backend: shared fields + `cut_nm` threshold — DONE (Round 003)
+6. [MEDIUM] Test suite: one test file per backend covering clustering correctness on a known-label synthetic SMLD, per-dataset handling, and `remove_unclustered` behavior — IN PROGRESS (DBSCAN + Hierarchical covered; Voronoi/HDBSCAN pending)
 7. [LOW] API overview + README covering the four backends and the `(smld, ClusterInfo)` tuple convention — TODO
 
 ---
 
 ## Round History
 
-| NNN | Focus | Status | Key finding |
-|-----|-------|--------|-------------|
-| 000 | Initial scaffold | done | Round system installed via /round-init; scope and interface agreed with @analysis |
-| 001 | Scaffold package skeleton | done | SMLMData dep + AbstractClusterConfig + ClusterInfo + cluster() fallback landed; 11/11 tests pass |
-| 002 | DBSCAN backend | done | DBSCANConfig + cluster dispatch via Clustering.dbscan; per-dataset namespacing verified; 56/56 tests pass |
+| NNN | Focus | Model | Status | Key finding |
+|-----|-------|-------|--------|-------------|
+| 000 | Initial scaffold | opus | done | Round system installed via /round-init; scope and interface agreed with @analysis |
+| 001 | Scaffold package skeleton | opus | done | SMLMData dep + AbstractClusterConfig + ClusterInfo + cluster() fallback landed; 11/11 tests pass |
+| 002 | DBSCAN backend | opus | done | DBSCANConfig + cluster dispatch via Clustering.dbscan; per-dataset namespacing verified; 56/56 tests pass |
+| 003 | Hierarchical backend | sonnet | done | HierarchicalConfig via hclust+cutree+min_points filter; HDBSCAN blocked (no library); 108/108 tests pass |
 
 ---
 
