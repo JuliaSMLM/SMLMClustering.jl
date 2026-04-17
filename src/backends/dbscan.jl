@@ -45,7 +45,7 @@ Base.@kwdef struct DBSCANConfig <: AbstractClusterConfig
 end
 
 function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
-    t0 = time()
+    t0 = time_ns()
     n_in = length(smld.emitters)
     cfg.eps_nm > 0 || throw(ArgumentError("DBSCANConfig.eps_nm must be > 0 (got $(cfg.eps_nm))"))
     cfg.min_points >= 1 ||
@@ -54,17 +54,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
     # Radius in microns (emitter coordinates are microns; eps is nm).
     radius_μm = cfg.eps_nm / 1000.0
 
-    # Group emitter indices by dataset if per_dataset, otherwise one global group.
-    groups = if cfg.per_dataset
-        buckets = Dict{Int, Vector{Int}}()
-        @inbounds for (i, e) in pairs(smld.emitters)
-            push!(get!(() -> Int[], buckets, e.dataset), i)
-        end
-        # Iterate datasets in sorted order for deterministic label numbering.
-        [buckets[k] for k in sort!(collect(keys(buckets)))]
-    else
-        [collect(1:n_in)]
-    end
+    groups = _group_by_dataset(smld, cfg.per_dataset)
 
     cluster_sizes = Int[]
     n_clustered = 0
@@ -94,18 +84,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
 
     n_clusters = length(cluster_sizes)
     n_noise = n_in - n_clustered
-
-    # Output SMLD: honor remove_unclustered by filtering emitters with id == 0.
-    out_emitters = cfg.remove_unclustered ?
-        [e for e in smld.emitters if e.id != 0] :
-        smld.emitters
-    smld_out = SMLMData.BasicSMLD(
-        out_emitters,
-        smld.camera,
-        smld.n_frames,
-        smld.n_datasets,
-        smld.metadata,
-    )
+    smld_out = _build_output(smld, cfg.remove_unclustered)
 
     info = ClusterInfo(
         n_in,
@@ -114,7 +93,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
         n_clusters,
         cluster_sizes,
         :dbscan,
-        time() - t0,
+        (time_ns() - t0) / 1e9,
     )
     return smld_out, info
 end

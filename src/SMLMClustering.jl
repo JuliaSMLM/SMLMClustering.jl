@@ -19,6 +19,7 @@ one of the backends.
 module SMLMClustering
 
 using SMLMData
+using Clustering
 
 export AbstractClusterConfig, ClusterInfo, cluster,
        DBSCANConfig, HierarchicalConfig, VoronoiConfig

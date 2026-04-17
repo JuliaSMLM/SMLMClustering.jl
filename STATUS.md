@@ -6,7 +6,7 @@
 
 ## Current State
 
-Three of the four planned backends are working end-to-end: `DBSCANConfig` (density-based, Clustering.jl), `HierarchicalConfig` (agglomerative, Clustering.hclust+cutree), and now `VoronoiConfig` (SR-Tesseler-style density clustering via `DelaunayTriangulation.jl`, 2D only). Shared helpers in `src/utils.jl` (`_coords_matrix`, `_pairwise_distances`) are reused across backends. Full test suite is **157/157 passing in 27.9 s** (slower than Round 003 because DelaunayTriangulation precompile + triangulate on the 180-point blob test dominates). `Project.toml` now pulls in `DelaunayTriangulation` (compat `1`) alongside `Clustering` and `SMLMData`; its transitive footprint is small (Random, ExactPredicates, AdaptivePredicates, EnumX — no plotting/CUDA/autodiff). HDBSCAN (Priority 3) remains BLOCKED per D1 — Keith's answer to Q1 was "keep the slot open, check periodically." @analysis's answer to Q2 landed late in the round: integration mode is `[sources]` with a GitHub URL on the JuliaSMLM org; this is recorded as a new priority (pushing the repo to GitHub) and is not yet done.
+Three of the four planned backends are working end-to-end: `DBSCANConfig`, `HierarchicalConfig`, and `VoronoiConfig`. Round 005 was a forced review round per the 5-round cadence: the three duplicated blocks across backends (group-by-dataset, min_points-compact-relabel, output-SMLD construction) are now centralized in `src/utils.jl` as `_group_by_dataset`, `_compact_relabel!`, and `_build_output`, used by all three backends; wall-clock timing switched from `time()` to monotonic `time_ns()`; a dead `using Clustering` in utils.jl was removed and relocated to the module file; `Base.show(::IO, ::ClusterInfo)` was added for readable REPL output. Full test suite is **157/157 passing in 28.5 s** (unchanged, DelaunayTriangulation precompile still dominates). Three DEFER items from the review are posted as OPEN questions: the `cluster` vs `cluster!` naming convention (Q3), whether `ClusterInfo.cluster_sizes` should track dataset provenance (Q4), and the Ward-linkage + `cut_nm` unit mismatch on `HierarchicalConfig` (Q5). Two AGREE-substantial items (BLAS-backed pairwise via `Distances.jl`; Voronoi duplicate-coordinate guard) are new Priorities 9 and 10. The GitHub push (Priority 7) remains blocked on Keith.
 
 ---
 
@@ -31,6 +31,8 @@ Three of the four planned backends are working end-to-end: `DBSCANConfig` (densi
 6. [MEDIUM] Test suite: one test file per backend covering clustering correctness on a known-label synthetic SMLD, per-dataset handling, and `remove_unclustered` behavior — IN PROGRESS (DBSCAN + Hierarchical + Voronoi covered; HDBSCAN pending a library)
 7. [HIGH] Push SMLMClustering to the `JuliaSMLM` GitHub org so SMLMAnalysis can pull it in via `[sources]` with `rev="main"`. @analysis's Q2 answer confirms the integration mode; @analysis is waiting on the URL + branch name. Needs Keith to create the repo under the org (external action) — TODO
 8. [LOW] API overview + README covering the four backends and the `(smld, ClusterInfo)` tuple convention — TODO
+9. [MEDIUM] Replace hand-written `_pairwise_distances` in `src/utils.jl` with `Distances.pairwise(Euclidean(), X; dims=2)`. `Distances.jl` is already transitively available via Clustering.jl; adding it to `[deps]` is cheap. Gives BLAS-backed pairwise for the hierarchical backend on large groups. Source: Round 005 review I4 (AGREE-substantial). — TODO
+10. [MEDIUM] Guard Voronoi backend against duplicate-coordinate inputs. `DelaunayTriangulation.get_area` raises `KeyError` on exact-coincident generators; the current Voronoi path will crash rather than error cleanly. Either deduplicate before `triangulate` or wrap with `ArgumentError`. Add a regression test at `test/test_voronoi.jl` for duplicate coords. Source: Round 005 review I6 (AGREE-substantial). — TODO
 
 ---
 
@@ -43,6 +45,7 @@ Three of the four planned backends are working end-to-end: `DBSCANConfig` (densi
 | 002 | DBSCAN backend | opus | done | DBSCANConfig + cluster dispatch via Clustering.dbscan; per-dataset namespacing verified; 56/56 tests pass |
 | 003 | Hierarchical backend | sonnet | done | HierarchicalConfig via hclust+cutree+min_points filter; HDBSCAN blocked (no library); 108/108 tests pass |
 | 004 | Voronoi backend | opus | done | VoronoiConfig via DelaunayTriangulation.jl (SR-Tesseler density); 2D only; 157/157 tests pass; Q1+Q2 processed |
+| 005 | Review at Round 005 | opus | done | /review-code: trivial fixes applied (helpers, time_ns, show); I4+I6 as P9+P10; Q3/Q4/Q5 posted |
 
 ---
 

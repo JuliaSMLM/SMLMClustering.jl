@@ -56,6 +56,13 @@ struct ClusterInfo <: SMLMData.AbstractSMLMInfo
     elapsed_s::Float64
 end
 
+function Base.show(io::IO, info::ClusterInfo)
+    print(io, "ClusterInfo(",
+          info.n_clustered, "/", info.n_locs_in, " clustered, ",
+          info.n_clusters, " clusters, algorithm=:", info.algorithm, ", ",
+          round(info.elapsed_s * 1e3, digits = 1), " ms)")
+end
+
 """
     cluster(smld::SMLMData.BasicSMLD, cfg::AbstractClusterConfig) -> (smld, ClusterInfo)
 

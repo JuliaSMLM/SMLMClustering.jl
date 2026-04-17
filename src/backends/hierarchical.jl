@@ -45,7 +45,7 @@ Base.@kwdef struct HierarchicalConfig <: AbstractClusterConfig
 end
 
 function cluster(smld::SMLMData.BasicSMLD, cfg::HierarchicalConfig)
-    t0 = time()
+    t0 = time_ns()
     n_in = length(smld.emitters)
     cfg.cut_nm > 0 ||
         throw(ArgumentError("HierarchicalConfig.cut_nm must be > 0 (got $(cfg.cut_nm))"))
@@ -57,17 +57,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::HierarchicalConfig)
             "(got $(cfg.linkage))"))
 
     cut_h = cfg.cut_nm / 1000.0  # nm → μm
-
-    # Group emitter indices by dataset if per_dataset, else one global group.
-    groups = if cfg.per_dataset
-        buckets = Dict{Int, Vector{Int}}()
-        @inbounds for (i, e) in pairs(smld.emitters)
-            push!(get!(() -> Int[], buckets, e.dataset), i)
-        end
-        [buckets[k] for k in sort!(collect(keys(buckets)))]
-    else
-        [collect(1:n_in)]
-    end
+    groups = _group_by_dataset(smld, cfg.per_dataset)
 
     cluster_sizes = Int[]
     n_clustered = 0
@@ -88,18 +78,8 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::HierarchicalConfig)
             raw_counts[l] += 1
         end
 
-        # Build remapping: raw cluster → final label, local to this group (V3 namespace).
-        # Clusters smaller than min_points become noise (0); the rest get compact 1..K_local.
-        label_map = zeros(Int, k_raw)
-        k_local = 0
-        @inbounds for (orig, cnt) in enumerate(raw_counts)
-            if cnt >= cfg.min_points
-                k_local += 1
-                label_map[orig] = k_local
-                push!(cluster_sizes, cnt)
-                n_clustered += cnt
-            end
-        end
+        label_map, added = _compact_relabel!(cluster_sizes, raw_counts, cfg.min_points)
+        n_clustered += added
 
         # Write final labels to emitter.id (local namespace per V3).
         @inbounds for (j, i) in pairs(idxs)
@@ -109,17 +89,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::HierarchicalConfig)
 
     n_clusters = length(cluster_sizes)
     n_noise = n_in - n_clustered
-
-    out_emitters = cfg.remove_unclustered ?
-        [e for e in smld.emitters if e.id != 0] :
-        smld.emitters
-    smld_out = SMLMData.BasicSMLD(
-        out_emitters,
-        smld.camera,
-        smld.n_frames,
-        smld.n_datasets,
-        smld.metadata,
-    )
+    smld_out = _build_output(smld, cfg.remove_unclustered)
 
     info = ClusterInfo(
         n_in,
@@ -128,7 +98,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::HierarchicalConfig)
         n_clusters,
         cluster_sizes,
         :hierarchical,
-        time() - t0,
+        (time_ns() - t0) / 1e9,
     )
     return smld_out, info
 end

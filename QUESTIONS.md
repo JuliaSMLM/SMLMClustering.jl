@@ -25,7 +25,44 @@
 HARD RULE: A human who has not read the round file should be able to answer the Short Question using only the What-each-answer-means block. If they need to read Technical detail to answer, the Short Question is wrong — rewrite it.
 -->
 
-(none)
+### Q3 — Should the clustering entry point be renamed to signal that it modifies its input?
+
+**From round:** 005
+
+**Short question:** In Julia, functions that modify their arguments conventionally end in an exclamation mark (e.g. `sort!`). The current clustering entry point is named without one, even though it modifies the input data in place. Should it be renamed so users see at a glance that calling it changes their input?
+
+**What each answer means:**
+- **Rename it (with the `!`):** Users of the package see a clear signal in the name that the function modifies its input. Any code already using the old name has to be updated — today that is one downstream consumer with a one-line re-export, so the cost is small.
+- **Keep the current name:** The name stays concise and the in-place modification is documented only in the function's docstring. No code changes elsewhere, but users who skim the name alone may be surprised when their input is mutated.
+- **Keep the name but stop modifying the input:** The function gets a non-mutating semantics (copy the data internally). Cleanest API, but every call allocates a fresh copy of all localizations, so large datasets pay a time/memory cost on every run.
+
+**Technical detail:** `cluster(smld::BasicSMLD, cfg::AbstractClusterConfig) -> (smld_out, ClusterInfo)` currently mutates `emitter.id` on the input SMLD's emitters (emitters are mutable structs from SMLMData). The returned `smld_out` shares the input's emitter vector (or a filtered copy when `remove_unclustered=true`). Tests in `test_dbscan.jl:78-103` explicitly exercise and assert on this mutation. Downstream SMLMAnalysis uses this via `const DBSCANConfig = SMLMClustering.DBSCANConfig` and a thin `analyze(smld, cfg)` wrapper — renaming to `cluster!` requires updating that wrapper only. The docstring at `src/types.jl:60-78` documents the mutation; V2 in KB records the `(smld, ClusterInfo)` return convention (which the rename does not touch). If the answer is "stop modifying the input," the implementation cost is O(n) emitter-copy on every call; for a 10⁶-localization SMLD this is tens of MB and ~100 ms extra.
+
+### Q4 — Should `ClusterInfo.cluster_sizes` be dataset-aware?
+
+**From round:** 005
+
+**Short question:** When the clustering is run on a multi-dataset file (imaging the same sample in several batches), the summary output reports one flat list of cluster sizes across the whole file. There is currently no way to tell from the summary which batch each cluster came from. Should the summary be changed to surface which batch each cluster belongs to?
+
+**What each answer means:**
+- **Yes — surface the batch per cluster:** The summary gains a second field pairing each cluster size with its batch number. Anyone reading the summary can immediately tell how clusters break down per batch. Any downstream code that already builds tables from the current summary needs to adapt to the added field.
+- **No — keep the flat summary:** The summary stays simple. Users who need per-batch breakdowns recompute them from the per-localization labels on the output (which already carry the batch index).
+
+**Technical detail:** `ClusterInfo.cluster_sizes::Vector{Int}` currently concatenates local `1..K_local` sizes across datasets when `per_dataset=true`; `cluster_sizes[k]` is the size of the k-th cluster in visit-order across all datasets, and the mapping to `(dataset, id)` is lost at summary level. Tests at `test_dbscan.jl:115-144`, `test_hierarchical.jl:98-124`, and `test_voronoi.jl:97-129` implicitly assume this flat convention. Options if "Yes": (a) add `cluster_dataset::Vector{Int}` parallel to `cluster_sizes` (breaks positional constructor; tests use positional today, grep ClusterInfo usage in tests); (b) change to `Dict{Int, Vector{Int}}` (dataset → sizes) — more invasive; (c) switch to `Vector{NamedTuple{(:dataset, :id, :size), ...}}`. Option (a) is least invasive. ClusterInfo is re-exported by SMLMAnalysis so the change surfaces one layer up; docs field table in `src/types.jl:35-41` would update.
+
+### Q5 — Is the Ward linkage + "cut in nanometers" combination on the Hierarchical backend a misleading default?
+
+**From round:** 005
+
+**Short question:** The hierarchical clustering backend asks users for a distance cut-off in nanometers, but its default linkage mode internally measures merges in a different unit (variance cost, not distance). That means passing "200 nm" under the default does not actually cut at 200 nm. Should the default be changed so the nanometer cut-off has its intended meaning, or should the field be renamed so it no longer implies nanometers?
+
+**What each answer means:**
+- **Change the default to a distance-based linkage (e.g. single-linkage):** The nanometer cut-off works as users expect straight out of the box. Advanced users who want variance-minimizing linkage opt in explicitly. SMLM-typical workflows gain a simpler mental model.
+- **Rename the field so it no longer implies nanometers:** The cut-off name is generic (e.g. `cut_h`), and the docstring explains that the unit depends on the linkage. More honest, but every downstream caller has to learn what "cut height" means per linkage.
+- **Split into two separate backend configs:** One for distance-based linkages (keeps `cut_nm`), one for variance-based linkages (different field name, different semantics). Cleanest but adds a type.
+- **Leave as-is, document more loudly:** Keep the current defaults and field name, just hammer in the docstring that Ward's "nm" is a cost-unit, not a distance.
+
+**Technical detail:** `HierarchicalConfig` defaults to `linkage=:ward` and names its cut field `cut_nm::Float64` (converted to μm via `/1000.0` before passing to `Clustering.cutree(hc, h=cut_h)`). Ward linkage's dendrogram heights are sums-of-squares merging costs in μm² (not a distance), so `cut_nm=200.0` under Ward means "cut where the merging cost crosses 0.04 μm²," which users will not intuit. Single/complete/average linkages use Euclidean distance heights in μm where the "nm" label is correct. Current tests use `linkage=:single` throughout, so the mismatch is not exercised. KB V6 defines the `_nm` suffix convention for distance-valued fields. If the answer is "change default," only `src/backends/hierarchical.jl:40` changes; all tests remain passing (they all pass `linkage=:single` explicitly). If "rename," every test line that passes `cut_nm=` must update too.
 
 ---
 

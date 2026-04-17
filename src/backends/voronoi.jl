@@ -73,7 +73,7 @@ Base.@kwdef struct VoronoiConfig <: AbstractClusterConfig
 end
 
 function cluster(smld::SMLMData.BasicSMLD, cfg::VoronoiConfig)
-    t0 = time()
+    t0 = time_ns()
     n_in = length(smld.emitters)
     cfg.density_factor > 0 ||
         throw(ArgumentError("VoronoiConfig.density_factor must be > 0 (got $(cfg.density_factor))"))
@@ -85,16 +85,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::VoronoiConfig)
             "3D Voronoi tessellation is not implemented by DelaunayTriangulation.jl; " *
             "use DBSCANConfig or HierarchicalConfig with use_3d=true for 3D data."))
 
-    # Group indices by dataset (or one global group).
-    groups = if cfg.per_dataset
-        buckets = Dict{Int, Vector{Int}}()
-        @inbounds for (i, e) in pairs(smld.emitters)
-            push!(get!(() -> Int[], buckets, e.dataset), i)
-        end
-        [buckets[k] for k in sort!(collect(keys(buckets)))]
-    else
-        [collect(1:n_in)]
-    end
+    groups = _group_by_dataset(smld, cfg.per_dataset)
 
     cluster_sizes = Int[]
     n_clustered = 0
@@ -154,16 +145,8 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::VoronoiConfig)
         @inbounds for l in raw_labels
             l > 0 && (raw_counts[l] += 1)
         end
-        label_map = zeros(Int, k_raw)
-        k_local = 0
-        @inbounds for (orig, cnt) in enumerate(raw_counts)
-            if cnt >= cfg.min_points
-                k_local += 1
-                label_map[orig] = k_local
-                push!(cluster_sizes, cnt)
-                n_clustered += cnt
-            end
-        end
+        label_map, added = _compact_relabel!(cluster_sizes, raw_counts, cfg.min_points)
+        n_clustered += added
 
         # Write final labels (local to group per V3).
         @inbounds for (j, i) in pairs(idxs)
@@ -174,17 +157,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::VoronoiConfig)
 
     n_clusters = length(cluster_sizes)
     n_noise = n_in - n_clustered
-
-    out_emitters = cfg.remove_unclustered ?
-        [e for e in smld.emitters if e.id != 0] :
-        smld.emitters
-    smld_out = SMLMData.BasicSMLD(
-        out_emitters,
-        smld.camera,
-        smld.n_frames,
-        smld.n_datasets,
-        smld.metadata,
-    )
+    smld_out = _build_output(smld, cfg.remove_unclustered)
 
     info = ClusterInfo(
         n_in,
@@ -193,7 +166,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::VoronoiConfig)
         n_clusters,
         cluster_sizes,
         :voronoi,
-        time() - t0,
+        (time_ns() - t0) / 1e9,
     )
     return smld_out, info
 end
