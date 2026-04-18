@@ -64,11 +64,12 @@ function Base.show(io::IO, info::ClusterInfo)
 end
 
 """
-    cluster(smld::SMLMData.BasicSMLD, cfg::AbstractClusterConfig) -> (smld, ClusterInfo)
+    cluster(smld::SMLMData.BasicSMLD, cfg::AbstractClusterConfig) -> (smld_out, ClusterInfo)
 
 Cluster the localizations in `smld` using the backend selected by the
-concrete type of `cfg`. Each backend mutates / rewrites `emitter.id` so
-that `0` marks noise and `1..K` mark distinct clusters; if
+concrete type of `cfg`. The input `smld` is **not modified** — each backend
+deep-copies the input emitters and writes cluster labels onto the copy's
+`emitter.id` (`0` marks noise, `1..K` mark distinct clusters). If
 `cfg.remove_unclustered` is `true` the returned SMLD contains only
 clustered emitters.
 

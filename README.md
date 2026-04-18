@@ -13,10 +13,10 @@ on `SMLMData.BasicSMLD` datasets.
 ```
 
 `cfg` is a concrete config struct that selects the backend and carries its parameters.
-The call mutates `emitter.id` on the input SMLD so that `0` marks noise and `1..K`
-marks distinct cluster ids. When `cfg.remove_unclustered = true` the returned `smld_out`
-contains only clustered emitters; otherwise it shares the input's emitter vector.
-`info` is a `ClusterInfo` summary (counts, sizes, algorithm, elapsed time).
+The call is **non-mutating**: input emitters are deep-copied, and cluster labels are
+written onto the copy's `emitter.id` (`0` marks noise, `1..K` mark distinct clusters).
+When `cfg.remove_unclustered = true` the returned `smld_out` contains only clustered
+emitters. `info` is a `ClusterInfo` summary (counts, sizes, algorithm, elapsed time).
 
 ## Backends
 
@@ -63,25 +63,33 @@ Groups containing exact-duplicate (x,y) coordinates raise `ArgumentError`.
 Agglomerative hierarchical clustering via `Clustering.hclust` + `cutree`.
 
 ```julia
+# Distance-based linkage: cut_threshold is in nm.
 cfg = HierarchicalConfig(
-    cut_nm          = 200.0,  # dendrogram cut height in nm (required)
-    linkage         = :ward,  # :single | :complete | :average | :ward
+    cut_threshold   = 200.0,   # cut height; unit depends on linkage (see below)
+    linkage         = :single, # :single | :complete | :average | :ward
     min_points      = 5,
     use_3d          = false,
     per_dataset     = true,
     remove_unclustered = false,
 )
 (smld_out, info) = cluster(smld, cfg)
+
+# Ward linkage: specify number of clusters directly (units-agnostic).
+cfg_ward = HierarchicalConfig(n_clusters = 3, linkage = :ward)
 ```
+
+Exactly one of `cut_threshold` or `n_clusters` must be supplied; providing both
+or neither raises `ArgumentError`.
 
 Builds an O(n²) pairwise distance matrix per group — prefer DBSCAN for
 datasets with ≫10,000 localizations per group. Supports 2D and 3D.
 
-**Note on Ward linkage and `cut_nm`:** Ward's dendrogram heights are
-variance-increase costs (μm²), not Euclidean distances. The `cut_nm` field
-converts to μm before cutting (`h = cut_nm / 1000.0`), but under Ward the
-numerical scale is a merging cost, not a distance. Distance-based linkages
-(`:single`, `:complete`, `:average`) respect the nanometer semantics directly.
+**Unit convention for `cut_threshold`:** for distance-based linkages
+(`:single`, `:complete`, `:average`) the value is in **nanometers** and is
+converted to μm internally. For `:ward` the dendrogram height is a
+variance-increase cost (roughly μm²) and is passed through without conversion —
+there is no meaningful nm interpretation under Ward, which is why `n_clusters`
+is usually the cleaner choice for Ward.
 
 ## ClusterInfo fields
 

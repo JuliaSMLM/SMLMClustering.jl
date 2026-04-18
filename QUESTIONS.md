@@ -25,6 +25,24 @@
 HARD RULE: A human who has not read the round file should be able to answer the Short Question using only the What-each-answer-means block. If they need to read Technical detail to answer, the Short Question is wrong — rewrite it.
 -->
 
+(none)
+
+---
+
+## ANSWERED
+
+<!-- Human has responded. Next round will process these and move them to PROCESSED. -->
+<!-- Format keeps everything from OPEN and adds:
+**Answer:** <human's direction>
+**Answered:** YYYY-MM-DD
+-->
+
+(none)
+
+---
+
+## PROCESSED
+
 ### Q3 — Should the clustering entry point be renamed to signal that it modifies its input?
 
 **From round:** 005
@@ -40,6 +58,12 @@ HARD RULE: A human who has not read the round file should be able to answer the 
 
 **Technical detail:** `cluster(smld::BasicSMLD, cfg::AbstractClusterConfig) -> (smld_out, ClusterInfo)` currently mutates `emitter.id` on the input SMLD's emitters (emitters are mutable structs from SMLMData). The returned `smld_out` shares the input's emitter vector (or a filtered copy when `remove_unclustered=true`). Tests in `test_dbscan.jl:78-103` explicitly exercise and assert on this mutation. Downstream SMLMAnalysis uses this via `const DBSCANConfig = SMLMClustering.DBSCANConfig` and a thin `analyze(smld, cfg)` wrapper — renaming to `cluster!` requires updating that wrapper only. The docstring at `src/types.jl:60-78` documents the mutation; V2 in KB records the `(smld, ClusterInfo)` return convention (which the rename does not touch). If the answer is "stop modifying the input," the implementation cost is O(n) emitter-copy on every call; for a 10⁶-localization SMLD this is tens of MB and ~100 ms extra.
 
+**Answer:** **Keep the name but stop modifying the input** — non-mutating `cluster` with copy semantics. Keith: "we don't modify our input; that is the interface convention used in SMLMAnalysis." Matches @analysis's consumer-side vote. Mutating `cluster!` variant remains an option only if performance pressure emerges later. Next round should copy-before-mutate inside every backend before touching `emitter.id`, update the tests at `test_dbscan.jl:78-103` (and any mirrored assertions in the other backend test files) that currently assert mutation-on-input, update the docstring at `src/types.jl:60-78` to document non-mutating semantics, and drop/adjust any KB note that locks in the old mutation behavior.
+
+**@analysis confirmation (2026-04-17, post-answer audit):** Non-mutating input IS the universal convention across SMLMAnalysis steps — detectfit, filter, frameconnect, drift, render, densityfilter, intensityfilter all return new `BasicSMLD`s (either with freshly-constructed emitters like detectfit's `_with_dataset`, or filtered subsets that share refs but never write to input fields). One known exception: `bagol.jl` mutates `e.track_id = 0` before a diagnostic report when `outdir` is set — that's arguably a bug on their side, not a pattern to copy. So "universal" is 95% true. **Implementation options (@analysis):** (a) rebuild emitters via a constructor like `_with_dataset` in `common.jl` — more explicit, requires per-emitter-type methods; (b) `deepcopy(smld.emitters)` then write `.id` into the copy — simpler, handles any `Emitter` subtype with no per-type work. Worker's call which to use; @analysis has no preference.
+**Answered:** 2026-04-17
+**Processed:** Round 011 — Every `cluster(smld, ::*Config)` method now begins with `smld = SMLMData.BasicSMLD(deepcopy(smld.emitters), smld.camera, smld.n_frames, smld.n_datasets, smld.metadata)` (option (b) — deepcopy), so labels are written onto the copy and the caller's input is untouched. Docstring at `src/types.jl` (cluster fallback) rewritten to state "The input smld is **not modified**". README.md entry-point and api_overview.md "Side effects" rewritten. Every backend's "labels written" testset now asserts `@test all(e -> e.id == 0, smld.emitters)` on the input post-call as a regression anchor. New KB V9 records the invariant. 175/175 tests passing.
+
 ### Q4 — Should `ClusterInfo.cluster_sizes` be dataset-aware?
 
 **From round:** 005
@@ -53,6 +77,10 @@ HARD RULE: A human who has not read the round file should be able to answer the 
 **Consumer input (@analysis, 2026-04-17):** Flat `Vector{Int}` is fine for SMLMAnalysis's `step_summary` needs — it surfaces `n_clusters` and perhaps median size, nothing per-dataset. If a downstream user wants a per-batch breakdown they can group emitters by `(dataset, id)` themselves. Adding `Vector{Vector{Int}}` or `Dict` now is YAGNI; it's reversible if a real use shows up.
 
 **Technical detail:** `ClusterInfo.cluster_sizes::Vector{Int}` currently concatenates local `1..K_local` sizes across datasets when `per_dataset=true`; `cluster_sizes[k]` is the size of the k-th cluster in visit-order across all datasets, and the mapping to `(dataset, id)` is lost at summary level. Tests at `test_dbscan.jl:115-144`, `test_hierarchical.jl:98-124`, and `test_voronoi.jl:97-129` implicitly assume this flat convention. Options if "Yes": (a) add `cluster_dataset::Vector{Int}` parallel to `cluster_sizes` (breaks positional constructor; tests use positional today, grep ClusterInfo usage in tests); (b) change to `Dict{Int, Vector{Int}}` (dataset → sizes) — more invasive; (c) switch to `Vector{NamedTuple{(:dataset, :id, :size), ...}}`. Option (a) is least invasive. ClusterInfo is re-exported by SMLMAnalysis so the change surfaces one layer up; docs field table in `src/types.jl:35-41` would update.
+
+**Answer:** **No — keep the flat summary.** No structural change to `ClusterInfo.cluster_sizes`. Matches @analysis's consumer-side vote. Users who need per-batch breakdowns recompute from per-localization labels. Next round: processing note in Round History, no code change.
+**Answered:** 2026-04-17
+**Processed:** Round 011 — No code change. `ClusterInfo.cluster_sizes::Vector{Int}` remains flat.
 
 ### Q5 — Is the Ward linkage + "cut in nanometers" combination on the Hierarchical backend a misleading default?
 
@@ -70,21 +98,9 @@ HARD RULE: A human who has not read the round file should be able to answer the 
 
 **Technical detail:** `HierarchicalConfig` defaults to `linkage=:ward` and names its cut field `cut_nm::Float64` (converted to μm via `/1000.0` before passing to `Clustering.cutree(hc, h=cut_h)`). Ward linkage's dendrogram heights are sums-of-squares merging costs in μm² (not a distance), so `cut_nm=200.0` under Ward means "cut where the merging cost crosses 0.04 μm²," which users will not intuit. Single/complete/average linkages use Euclidean distance heights in μm where the "nm" label is correct. Current tests use `linkage=:single` throughout, so the mismatch is not exercised. KB V6 defines the `_nm` suffix convention for distance-valued fields. If the answer is "change default," only `src/backends/hierarchical.jl:40` changes; all tests remain passing (they all pass `linkage=:single` explicitly). If "rename," every test line that passes `cut_nm=` must update too.
 
----
-
-## ANSWERED
-
-<!-- Human has responded. Next round will process these and move them to PROCESSED. -->
-<!-- Format keeps everything from OPEN and adds:
-**Answer:** <human's direction>
-**Answered:** YYYY-MM-DD
--->
-
-(none)
-
----
-
-## PROCESSED
+**Answer:** **Do both for now.** Rename `cut_nm::Float64` → `cut_threshold::Float64` (docstring calls out linkage-dependent units — nm for distance-based linkages, μm²-ish for Ward/variance-based) AND add optional `n_clusters::Union{Int,Nothing}=nothing` so users can specify K directly (natural for Ward, awkward but valid for single-linkage). Matches @analysis's full preference. Exactly one of `cut_threshold` / `n_clusters` should drive `Clustering.cutree` per call — if both or neither are set, raise a clear `ArgumentError`. Next round: edit `src/backends/hierarchical.jl` (field rename + new optional field + dispatch in the `cluster(smld, ::HierarchicalConfig)` method + mutual-exclusion check), swap every `cut_nm=` → `cut_threshold=` in `test/test_hierarchical.jl` and add tests for the `n_clusters` path and the both-set / neither-set error, update the docstring, update KB V6 to document the linkage-dependent-unit caveat on `cut_threshold`.
+**Answered:** 2026-04-17
+**Processed:** Round 011 — `HierarchicalConfig` rewritten: `cut_threshold::Union{Float64,Nothing}=nothing` (linkage-dependent unit — nm for `:single`/`:complete`/`:average`, μm²-ish for `:ward`) + `n_clusters::Union{Int,Nothing}=nothing` + `xor(ct_set, nc_set)` mutual-exclusion check raising `ArgumentError` on both-set or neither-set. Dispatch: `cutree(hc, h=cut_h)` vs `cutree(hc, k=min(n_clusters, group_size))`. Every `cut_nm=` swapped to `cut_threshold=` in `test/test_hierarchical.jl`; new testset covers the Ward + `n_clusters=3` path; argument-validation testset covers all three error cases (n_clusters=0, neither, both). README.md and api_overview.md Hierarchical blocks updated. KB V6 amended with the linkage-dependent-unit caveat explaining why `cut_threshold` deliberately drops the `_nm` suffix. 175/175 tests passing.
 
 <!-- Archived after a round applied the answer. Keep for audit trail. -->
 

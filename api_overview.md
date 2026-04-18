@@ -13,13 +13,13 @@ source is the docstrings in `src/`. See `README.md` for user-facing narrative.
 
 **What it does:** Clusters the localizations in `smld` using the algorithm selected
 by the concrete type of `cfg`. Writes per-emitter cluster labels to `emitter.id`
-(`0` = noise, `1..K` = cluster, local to each dataset when `per_dataset=true`).
-Returns a tuple of the (possibly filtered) output SMLD and a `ClusterInfo` summary.
+on the **output** SMLD (`0` = noise, `1..K` = cluster, local to each dataset when
+`per_dataset=true`). Returns a tuple of the output SMLD and a `ClusterInfo` summary.
 
-**Side effects:** Mutates `emitter.id` on the input SMLD's emitter objects (mutable
-structs from SMLMData). The returned SMLD shares the input's emitter vector unless
-`cfg.remove_unclustered = true`, in which case a new vector containing only clustered
-emitters is allocated.
+**Side effects:** None. The input `smld` is not modified — each backend deep-copies
+the input emitters at entry and writes labels onto the copy. When
+`cfg.remove_unclustered = true` the returned SMLD contains only the clustered
+emitters from that copy; otherwise it contains all emitters from the copy.
 
 **Dispatch:** Concrete config types dispatch to their backend. Passing an unsupported
 `AbstractClusterConfig` subtype raises an error naming the supported backends.
@@ -83,29 +83,34 @@ DBSCANConfig(eps_nm=100.0, min_points=3, use_3d=true)
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `cut_nm` | `Float64` | (required) | Dendrogram cut height in **nm** (`h = cut_nm / 1000.0` μm) |
+| `cut_threshold` | `Union{Float64,Nothing}` | `nothing` | Dendrogram cut height; **unit depends on linkage** (see caveat) |
+| `n_clusters` | `Union{Int,Nothing}` | `nothing` | Cut into exactly K clusters; mutually exclusive with `cut_threshold` |
 | `linkage` | `Symbol` | `:ward` | `:single`, `:complete`, `:average`, or `:ward` |
 | `min_points` | `Int` | `5` | Sub-threshold clusters relabeled noise |
 | `use_3d` | `Bool` | `false` | 2D or 3D clustering |
 | `per_dataset` | `Bool` | `true` | Per-dataset namespacing |
 | `remove_unclustered` | `Bool` | `false` | Drop noise emitters |
 
-**Validation:** `cut_nm > 0`, `min_points >= 1`, `linkage` in `(:single, :complete, :average, :ward)`.
+**Validation:** exactly one of `cut_threshold` / `n_clusters` set (both-or-neither →
+`ArgumentError`), `cut_threshold > 0` when set, `n_clusters >= 1` when set,
+`min_points >= 1`, `linkage` in `(:single, :complete, :average, :ward)`.
 
 **Scalability:** O(n²) pairwise distance matrix per group. Prefer `DBSCANConfig` for
 groups with ≫10,000 localizations.
 
 **Supports 3D:** yes.
 
-**Ward linkage caveat:** Ward dendrogram heights are variance-increase costs (μm²), not
-Euclidean distances. `cut_nm` converts to μm before cutting, but under Ward the scale is
-a merging cost. Distance-based linkages (`:single`, `:complete`, `:average`) respect the
-nm→μm semantics directly.
+**`cut_threshold` unit convention:** for distance-based linkages (`:single`,
+`:complete`, `:average`) the value is in **nanometers** and is converted to μm
+internally (`h = cut_threshold / 1000.0`). For `:ward` the dendrogram height is a
+variance-increase cost (roughly μm²) and is passed through without conversion —
+there is no meaningful nm interpretation under Ward, which is why `n_clusters` is
+usually the cleaner choice for Ward.
 
 **Constructor:**
 ```julia
-HierarchicalConfig(cut_nm=200.0)
-HierarchicalConfig(cut_nm=150.0, linkage=:single)
+HierarchicalConfig(cut_threshold=200.0, linkage=:single)  # distance-based, nm
+HierarchicalConfig(n_clusters=3, linkage=:ward)           # Ward, by count
 ```
 
 ---

@@ -46,6 +46,10 @@ end
 
 function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
     t0 = time_ns()
+    # Non-mutating semantics: deep-copy emitters so cluster labels go to a
+    # fresh SMLD, not back onto the caller's input. See KB V9.
+    smld = SMLMData.BasicSMLD(deepcopy(smld.emitters), smld.camera,
+                              smld.n_frames, smld.n_datasets, smld.metadata)
     n_in = length(smld.emitters)
     cfg.eps_nm > 0 || throw(ArgumentError("DBSCANConfig.eps_nm must be > 0 (got $(cfg.eps_nm))"))
     cfg.min_points >= 1 ||

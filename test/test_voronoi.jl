@@ -61,7 +61,7 @@ using Random
         @test info.n_noise >= 40
     end
 
-    @testset "labels written to emitter.id + remove_unclustered" begin
+    @testset "labels written to emitter.id + remove_unclustered + non-mutating" begin
         rng = Xoshiro(11)
         pts = Tuple{Float64,Float64,Int}[]
         append!(pts, _blob(rng, 1.0, 1.0, 0.005, 40))
@@ -79,19 +79,23 @@ using Random
 
         @test length(smld_keep.emitters) == n_in
         @test info_keep.n_clusters == 2
-        @test all(e -> e.id in 0:info_keep.n_clusters, smld.emitters)
-        @test any(e -> e.id == 0, smld.emitters)
+        # Input SMLD emitters are NOT mutated (non-mutating semantics).
+        @test all(e -> e.id == 0, smld.emitters)
+        # Output SMLD carries the labels.
+        @test all(e -> e.id in 0:info_keep.n_clusters, smld_keep.emitters)
+        @test any(e -> e.id == 0, smld_keep.emitters)
         for k in 1:info_keep.n_clusters
-            @test count(e -> e.id == k, smld.emitters) == info_keep.cluster_sizes[k]
+            @test count(e -> e.id == k, smld_keep.emitters) == info_keep.cluster_sizes[k]
         end
 
-        smld2 = _make_2d_smld(pts; n_datasets = 1)
         cfg_rm = VoronoiConfig(density_factor = 2.0, min_points = 5,
                                 per_dataset = false, remove_unclustered = true)
-        smld_rm, info_rm = cluster(smld2, cfg_rm)
+        smld_rm, info_rm = cluster(smld, cfg_rm)
         @test info_rm.n_clusters == 2
         @test length(smld_rm.emitters) == info_rm.n_clustered
         @test all(e -> e.id != 0, smld_rm.emitters)
+        # Original smld still untouched.
+        @test all(e -> e.id == 0, smld.emitters)
     end
 
     @testset "per_dataset label namespace is local" begin
@@ -112,19 +116,19 @@ using Random
 
         cfg = VoronoiConfig(density_factor = 2.0, min_points = 5,
                              per_dataset = true)
-        _, info = cluster(smld, cfg)
+        smld_out, info = cluster(smld, cfg)
         @test info.n_clusters == 4
 
-        ids_ds1 = sort!(unique(e.id for e in smld.emitters if e.dataset == 1 && e.id > 0))
-        ids_ds2 = sort!(unique(e.id for e in smld.emitters if e.dataset == 2 && e.id > 0))
+        ids_ds1 = sort!(unique(e.id for e in smld_out.emitters if e.dataset == 1 && e.id > 0))
+        ids_ds2 = sort!(unique(e.id for e in smld_out.emitters if e.dataset == 2 && e.id > 0))
         @test ids_ds1 == [1, 2]
         @test ids_ds2 == [1, 2]
 
         # Contrast: per_dataset=false merges same-coordinate blobs across datasets.
-        smld_flat = _make_2d_smld(pts; n_datasets = 2)
+        # Reuse same input — non-mutating semantics preserve original ids.
         cfg_flat = VoronoiConfig(density_factor = 2.0, min_points = 5,
                                    per_dataset = false)
-        _, info_flat = cluster(smld_flat, cfg_flat)
+        _, info_flat = cluster(smld, cfg_flat)
         @test info_flat.n_clusters == 2
     end
 

@@ -75,7 +75,7 @@ end
         @test info.n_noise >= 20
     end
 
-    @testset "labels written to emitter.id + remove_unclustered" begin
+    @testset "labels written to emitter.id + remove_unclustered + non-mutating" begin
         rng = Xoshiro(1)
         # Two tight blobs + 5 distant noise points.
         pts = Tuple{Float64,Float64,Int}[]
@@ -92,24 +92,25 @@ end
         smld_keep, info_keep = cluster(smld, cfg)
         @test length(smld_keep.emitters) == n_in
         @test info_keep.n_clusters == 2
-        # The original `smld` was mutated in place (emitters are mutable); its
-        # ids should match the kept-SMLD's (they share the vector).
-        @test all(e -> e.id in 0:info_keep.n_clusters, smld.emitters)
-        @test any(e -> e.id == 0, smld.emitters)
+        # Input SMLD emitters are NOT mutated (non-mutating semantics).
+        @test all(e -> e.id == 0, smld.emitters)
+        # Output SMLD carries the labels.
+        @test all(e -> e.id in 0:info_keep.n_clusters, smld_keep.emitters)
+        @test any(e -> e.id == 0, smld_keep.emitters)
         # Each cluster's size should match what info reports.
         for k in 1:info_keep.n_clusters
-            @test count(e -> e.id == k, smld.emitters) == info_keep.cluster_sizes[k]
+            @test count(e -> e.id == k, smld_keep.emitters) == info_keep.cluster_sizes[k]
         end
 
-        # remove_unclustered=true: rebuild a fresh SMLD because the previous call
-        # mutated ids in place.
-        smld2 = _make_2d_smld(pts; n_datasets = 1)
+        # remove_unclustered=true: same input SMLD, still not mutated.
         cfg_rm = DBSCANConfig(eps_nm = 100.0, min_points = 5,
                               per_dataset = false, remove_unclustered = true)
-        smld_rm, info_rm = cluster(smld2, cfg_rm)
+        smld_rm, info_rm = cluster(smld, cfg_rm)
         @test info_rm.n_clusters == 2
         @test length(smld_rm.emitters) == info_rm.n_clustered
         @test all(e -> e.id != 0, smld_rm.emitters)
+        # Original smld still untouched.
+        @test all(e -> e.id == 0, smld.emitters)
     end
 
     @testset "per_dataset label namespace is local" begin
@@ -124,21 +125,21 @@ end
         smld = _make_2d_smld(pts; n_datasets = 2)
 
         cfg = DBSCANConfig(eps_nm = 100.0, min_points = 5, per_dataset = true)
-        _, info = cluster(smld, cfg)
+        smld_out, info = cluster(smld, cfg)
         @test info.n_clusters == 4
         @test info.n_clustered == 80
 
         # Within each dataset the ids should be {1, 2}.
-        ids_ds1 = sort!(unique(e.id for e in smld.emitters if e.dataset == 1))
-        ids_ds2 = sort!(unique(e.id for e in smld.emitters if e.dataset == 2))
+        ids_ds1 = sort!(unique(e.id for e in smld_out.emitters if e.dataset == 1))
+        ids_ds2 = sort!(unique(e.id for e in smld_out.emitters if e.dataset == 2))
         @test ids_ds1 == [1, 2]
         @test ids_ds2 == [1, 2]
 
         # Contrast: with per_dataset=false, all points cluster into 2 groups
-        # (the two spatial centers are identical across datasets).
-        smld_flat = _make_2d_smld(pts; n_datasets = 2)
+        # (the two spatial centers are identical across datasets). Reuse the
+        # same input smld — non-mutating semantics mean ids are still all 0.
         cfg_flat = DBSCANConfig(eps_nm = 100.0, min_points = 5, per_dataset = false)
-        _, info_flat = cluster(smld_flat, cfg_flat)
+        _, info_flat = cluster(smld, cfg_flat)
         @test info_flat.n_clusters == 2
         @test info_flat.n_clustered == 80
     end

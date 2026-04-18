@@ -76,6 +76,10 @@ end
 
 function cluster(smld::SMLMData.BasicSMLD, cfg::VoronoiConfig)
     t0 = time_ns()
+    # Non-mutating semantics: deep-copy emitters so cluster labels go to a
+    # fresh SMLD, not back onto the caller's input. See KB V9.
+    smld = SMLMData.BasicSMLD(deepcopy(smld.emitters), smld.camera,
+                              smld.n_frames, smld.n_datasets, smld.metadata)
     n_in = length(smld.emitters)
     cfg.density_factor > 0 ||
         throw(ArgumentError("VoronoiConfig.density_factor must be > 0 (got $(cfg.density_factor))"))
