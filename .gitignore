@@ -6,3 +6,7 @@
 /docs/build/
 /.claude/scheduled_tasks.lock
 /.claude/dashboard/*.pane
+/.claude/commands/start-round.md
+/.claude/dashboard/regenerate.md
+/.claude/dashboard/status-view.md
+/.claude/scripts/dispatch-round.sh
