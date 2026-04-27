@@ -93,6 +93,12 @@ function _hopkins_one_group(X::Matrix{Float64}, n_samples::Int, repeats::Int, rn
     tree = KDTree(X)
     Hs = Vector{Float64}(undef, repeats)
 
+    # Workspace for sampling n_samples indices without replacement via partial
+    # Fisher-Yates. Allocated once per group (was once per repeat, via
+    # randperm(rng, n)[1:n_samples] which materializes a length-n permutation
+    # then slices — wasteful for n ≫ n_samples, e.g. 100k-emitter cells).
+    workspace = collect(1:n)
+
     for r in 1:repeats
         u_sum = 0.0
         w_sum = 0.0
@@ -107,9 +113,15 @@ function _hopkins_one_group(X::Matrix{Float64}, n_samples::Int, repeats::Int, rn
             u_sum += dists[1]^d
         end
 
-        # 2. Sampled real points: drawn without replacement; NN to OTHER real points.
-        sample_idx = randperm(rng, n)[1:n_samples]
-        for j in sample_idx
+        # 2. Sampled real points: drawn without replacement via partial
+        # Fisher-Yates on `workspace`. After the inner loop, workspace[1:n_samples]
+        # holds n_samples distinct indices from 1..n.
+        @inbounds for k in 1:n_samples
+            j = rand(rng, k:n)
+            workspace[k], workspace[j] = workspace[j], workspace[k]
+        end
+        @inbounds for k in 1:n_samples
+            j = workspace[k]
             pt = @view X[:, j]
             # k=2 because the nearest neighbor of a data point in its own tree
             # is itself (distance 0); we want the second-nearest.
