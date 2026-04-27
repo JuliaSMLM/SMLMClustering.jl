@@ -19,6 +19,7 @@ using Statistics
         @test cfg2.per_dataset === false
     end
 
+    if SMLM_TEST_FULL
     @testset "uniform Poisson 2D: median density ≈ N / area" begin
         # 1500 uniform points in a 5x5 μm box → expected density ≈ 60 μm⁻².
         # Convex-hull clipping plus boundary cells bias the empirical median
@@ -44,7 +45,9 @@ using Statistics
         # Within ±30% of the analytic expectation.
         @test abs(info.statistic - expected) / expected < 0.3
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "extras carry per-emitter density and area in original order" begin
         rng = Xoshiro(20260427)
         pts = Tuple{Float64,Float64,Int}[]
@@ -69,7 +72,9 @@ using Statistics
             end
         end
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "tight blob → median density >> uniform-baseline median" begin
         rng = Xoshiro(20260427)
         # Tight σ=5 nm blob (high local density) plus some scatter so the
@@ -96,7 +101,9 @@ using Statistics
         # than the uniform baseline (blob cells are ~σ²/N tiny).
         @test info_blob.statistic > 10 * info_uniform.statistic
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "per_dataset: per-dataset tessellation, flat per-emitter vector" begin
         rng = Xoshiro(20260427)
         # ds 1: 200 points in a 1x1 μm box → density ~200/μm²
@@ -137,7 +144,9 @@ using Statistics
         # ds 1 occupies indices 1:200 in BOTH per_dataset modes.
         @test all(!isnan, ρ_flat)
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "<3 points in a dataset → those emitters get NaN, others fine" begin
         # ds 1: 2 points (degenerate, no tessellation)
         # ds 2: 50 points (normal tessellation)
@@ -164,6 +173,7 @@ using Statistics
         # Median ignores the NaNs.
         @test !isnan(info.statistic)
     end
+    end  # SMLM_TEST_FULL
 
     @testset "duplicate (x,y) coordinates raise ArgumentError" begin
         # Exact-coincident generators cause DelaunayTriangulation.get_area
@@ -181,6 +191,7 @@ using Statistics
         @test_throws ArgumentError cluster_statistics(smld2, cfg2)
     end
 
+    if SMLM_TEST_FULL
     @testset "empty SMLD returns NaN statistic, empty per-emitter vectors" begin
         smld = _make_2d_smld(Tuple{Float64,Float64,Int}[]; n_datasets = 1)
         cfg = VoronoiDensityConfig(per_dataset = false)
@@ -191,6 +202,7 @@ using Statistics
         @test info.extras[:density_per_emitter] == Float64[]
         @test info.extras[:area_per_emitter] == Float64[]
     end
+    end  # SMLM_TEST_FULL
 
     @testset "use_3d=true raises ArgumentError" begin
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1)])
@@ -213,6 +225,7 @@ using Statistics
         @test all(e -> e.id == 0, smld.emitters)
     end
 
+    if SMLM_TEST_FULL
     @testset "summary scalar = median of non-NaN entries" begin
         # Build a deterministic small grid so we can check the summary
         # statistic exactly against Statistics.median.
@@ -229,5 +242,6 @@ using Statistics
         valid = filter(!isnan, ρ)
         @test info.statistic ≈ median(valid)
     end
+    end  # SMLM_TEST_FULL
 
 end

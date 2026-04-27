@@ -40,6 +40,7 @@ end
         @test cfg2.remove_unclustered === true
     end
 
+    if SMLM_TEST_FULL
     @testset "three well-separated blobs + noise" begin
         rng = Xoshiro(20260417)
         σ = 0.010                 # 10 nm cluster scatter — tight
@@ -74,7 +75,9 @@ end
         @test info.n_clustered >= 115
         @test info.n_noise >= 20
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "labels written to emitter.id + remove_unclustered + non-mutating" begin
         rng = Xoshiro(1)
         # Two tight blobs + 5 distant noise points.
@@ -112,7 +115,9 @@ end
         # Original smld still untouched.
         @test all(e -> e.id == 0, smld.emitters)
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "per_dataset label namespace is local" begin
         # Two datasets, each with two tight blobs; ids within each dataset should
         # be 1..2, so (dataset, id) is unique but id alone overlaps.
@@ -143,6 +148,7 @@ end
         @test info_flat.n_clusters == 2
         @test info_flat.n_clustered == 80
     end
+    end  # SMLM_TEST_FULL
 
     @testset "argument validation" begin
         smld = _make_2d_smld([(0.0, 0.0, 1)])
@@ -156,6 +162,7 @@ end
         @test_throws ErrorException cluster(smld, cfg)
     end
 
+    if SMLM_TEST_FULL
     @testset "3D clustering path" begin
         cam = IdealCamera(1:64, 1:64, 0.1)
         rng = Xoshiro(3)
@@ -178,7 +185,9 @@ end
         @test info.n_clusters == 2
         @test info.n_clustered == 50
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "empty SMLD" begin
         smld = _make_2d_smld(Tuple{Float64,Float64,Int}[]; n_datasets = 1)
         cfg = DBSCANConfig(eps_nm = 50.0, per_dataset = false)
@@ -190,5 +199,6 @@ end
         @test isempty(info.cluster_sizes)
         @test isempty(smld_out.emitters)
     end
+    end  # SMLM_TEST_FULL
 
 end

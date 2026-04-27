@@ -34,6 +34,7 @@ using Random
         @test cfg3.linkage === :ward
     end
 
+    if SMLM_TEST_FULL
     @testset "three well-separated blobs + noise (single linkage)" begin
         rng = Xoshiro(20260417)
         σ = 0.010             # 10 nm — tight clusters
@@ -67,7 +68,9 @@ using Random
         @test info.n_clustered >= 115
         @test info.n_noise >= 20
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "n_clusters path (Ward linkage)" begin
         rng = Xoshiro(20260418)
         σ = 0.010
@@ -87,7 +90,9 @@ using Random
         @test info.n_clustered == 3 * n_per_blob
         @test info.n_noise == 0
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "labels written to emitter.id + remove_unclustered + non-mutating" begin
         rng = Xoshiro(10)
         pts = Tuple{Float64,Float64,Int}[]
@@ -124,7 +129,9 @@ using Random
         # Original smld still untouched after second call.
         @test all(e -> e.id == 0, smld.emitters)
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "per_dataset label namespace is local" begin
         rng = Xoshiro(20)
         pts = Tuple{Float64,Float64,Int}[]
@@ -151,6 +158,7 @@ using Random
         @test info_flat.n_clusters == 2
         @test info_flat.n_clustered == 80
     end
+    end  # SMLM_TEST_FULL
 
     @testset "argument validation" begin
         smld = _make_2d_smld([(0.0, 0.0, 1)])
@@ -176,6 +184,7 @@ using Random
         @test_throws ErrorException cluster(smld, cfg)
     end
 
+    if SMLM_TEST_FULL
     @testset "3D clustering path" begin
         cam = IdealCamera(1:64, 1:64, 0.1)
         rng = Xoshiro(30)
@@ -198,7 +207,9 @@ using Random
         @test info.n_clusters == 2
         @test info.n_clustered == 50
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "empty SMLD" begin
         smld = _make_2d_smld(Tuple{Float64,Float64,Int}[]; n_datasets = 1)
         cfg = HierarchicalConfig(cut_threshold = 100.0, per_dataset = false)
@@ -210,7 +221,9 @@ using Random
         @test isempty(info.cluster_sizes)
         @test isempty(smld_out.emitters)
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "min_points filters small clusters as noise" begin
         # Three tight blobs of 10 pts each + two singletons.
         rng = Xoshiro(40)
@@ -235,5 +248,6 @@ using Random
         @test info15.n_clusters == 0
         @test info15.n_noise == length(pts)
     end
+    end  # SMLM_TEST_FULL
 
 end

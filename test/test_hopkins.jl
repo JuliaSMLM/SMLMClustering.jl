@@ -26,6 +26,7 @@ using Random
         @test cfg2.per_dataset === false
     end
 
+    if SMLM_TEST_FULL
     @testset "uniform random data → H ≈ 0.5" begin
         # Uniform-random 2D over a 5×5 μm box, single dataset; with enough
         # samples and repeats the expected H is 0.5. Allow ±0.1 slack.
@@ -48,7 +49,9 @@ using Random
         @test info.elapsed_s >= 0
         @test 0.4 <= info.statistic <= 0.6
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "tight gaussian blob → H > 0.85" begin
         rng = Xoshiro(20260427)
         # Single very tight blob of 500 points (σ = 5 nm) — strong clustering.
@@ -68,7 +71,9 @@ using Random
         _, info = cluster_statistics(smld, cfg)
         @test info.statistic > 0.85
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "per_dataset produces per-dataset vector" begin
         rng = Xoshiro(20260427)
         # Two datasets with very different clustering tendency:
@@ -97,7 +102,9 @@ using Random
         # Reported statistic is the mean across datasets.
         @test info.statistic ≈ (per_ds[1] + per_ds[2]) / 2
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "seed reproducibility" begin
         rng = Xoshiro(20260427)
         pts = Tuple{Float64,Float64,Int}[]
@@ -118,6 +125,7 @@ using Random
         _, info_c = cluster_statistics(smld, cfg2)
         @test info_a.statistic != info_c.statistic
     end
+    end  # SMLM_TEST_FULL
 
     @testset "input SMLD is not modified (passthrough preserves emitter state)" begin
         rng = Xoshiro(20260427)
@@ -136,6 +144,7 @@ using Random
         @test all(e -> e.id == 0, smld.emitters)
     end
 
+    if SMLM_TEST_FULL
     @testset "3D data path" begin
         cam = IdealCamera(1:64, 1:64, 0.1)
         rng = Xoshiro(20260427)
@@ -153,6 +162,7 @@ using Random
         _, info = cluster_statistics(smld3, cfg)
         @test 0.4 <= info.statistic <= 0.6
     end
+    end  # SMLM_TEST_FULL
 
     @testset "argument validation" begin
         smld = _make_2d_smld([(1.0, 1.0, 1), (2.0, 2.0, 1), (3.0, 3.0, 1)])
@@ -160,6 +170,7 @@ using Random
         @test_throws ArgumentError cluster_statistics(smld, HopkinsConfig(random_repeats = 0))
     end
 
+    if SMLM_TEST_FULL
     @testset "empty SMLD returns NaN, not an error" begin
         smld = _make_2d_smld(Tuple{Float64,Float64,Int}[]; n_datasets = 1)
         cfg = HopkinsConfig(n_samples = 10, per_dataset = false)
@@ -167,7 +178,9 @@ using Random
         @test info.n_locs_in == 0
         @test isnan(info.statistic)
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "n_samples > n_points returns NaN per group" begin
         # Tiny SMLD: only 5 points, n_samples=10 → too many samples requested.
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 0.5, 1), (0.3, 1.2, 1),
@@ -176,5 +189,6 @@ using Random
         _, info = cluster_statistics(smld, cfg)
         @test isnan(info.statistic)
     end
+    end  # SMLM_TEST_FULL
 
 end

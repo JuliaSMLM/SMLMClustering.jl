@@ -25,6 +25,7 @@ using Random
         @test cfg2.remove_unclustered === true
     end
 
+    if SMLM_TEST_FULL
     @testset "three well-separated blobs + scattered noise" begin
         rng = Xoshiro(20260417)
         σ = 0.010             # 10 nm — tight clusters
@@ -60,7 +61,9 @@ using Random
         # Noise points should be largely excluded.
         @test info.n_noise >= 40
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "labels written to emitter.id + remove_unclustered + non-mutating" begin
         rng = Xoshiro(11)
         pts = Tuple{Float64,Float64,Int}[]
@@ -97,7 +100,9 @@ using Random
         # Original smld still untouched.
         @test all(e -> e.id == 0, smld.emitters)
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "per_dataset label namespace is local" begin
         rng = Xoshiro(21)
         pts = Tuple{Float64,Float64,Int}[]
@@ -131,6 +136,7 @@ using Random
         _, info_flat = cluster(smld, cfg_flat)
         @test info_flat.n_clusters == 2
     end
+    end  # SMLM_TEST_FULL
 
     @testset "argument validation" begin
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1)])
@@ -157,6 +163,7 @@ using Random
         @test_throws ArgumentError cluster(smld2, cfg2)
     end
 
+    if SMLM_TEST_FULL
     @testset "degenerate groups (<3 points) are all noise" begin
         # One dataset with only 2 points; Voronoi can't tessellate → all noise.
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 1.0, 1)]; n_datasets = 1)
@@ -167,7 +174,9 @@ using Random
         @test info.n_noise == 2
         @test all(e -> e.id == 0, smld_out.emitters)
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "empty SMLD" begin
         smld = _make_2d_smld(Tuple{Float64,Float64,Int}[]; n_datasets = 1)
         cfg = VoronoiConfig(per_dataset = false)
@@ -179,7 +188,9 @@ using Random
         @test isempty(info.cluster_sizes)
         @test isempty(smld_out.emitters)
     end
+    end  # SMLM_TEST_FULL
 
+    if SMLM_TEST_FULL
     @testset "density_factor threshold behavior" begin
         # Tight blob (area ≪ mean) + sparse halo. With density_factor=2, blob
         # survives. With density_factor = a very small fraction, the threshold
@@ -208,5 +219,6 @@ using Random
         # one giant component forms; more points get clustered than under strict.
         @test info_loose.n_clustered > info_strict.n_clustered
     end
+    end  # SMLM_TEST_FULL
 
 end

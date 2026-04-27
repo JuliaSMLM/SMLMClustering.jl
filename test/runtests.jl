@@ -2,6 +2,14 @@ using SMLMClustering
 using SMLMData
 using Test
 
+# Test-tier gate. Default off → only the fast tier runs (interface, exports,
+# Config round-trip, basic correctness). Set SMLM_TEST_FULL=true (or any value
+# accepted as truthy here) to also run the thorough tier — multi-blob ground-
+# truth recovery, edge cases, statistical value checks, large-n stress, etc.
+# Cross-package convention shared with SMLMAnalysis / SMLMBaGoL /
+# SMLMDriftCorrection; see Round History in STATUS.md for the rollout note.
+const SMLM_TEST_FULL = lowercase(get(ENV, "SMLM_TEST_FULL", "false")) in ("true", "1", "yes")
+
 # Dummy concrete subtype used to exercise the abstract `cluster` fallback.
 # Defined at top level because @testset scoping disallows struct definitions
 # inside its body.
@@ -41,4 +49,8 @@ struct _DummyClusterCfg <: AbstractClusterConfig end
     include("test_hopkins.jl")
     include("test_voronoi_density.jl")
 
+end
+
+if !SMLM_TEST_FULL
+    @info "Skipping thorough tests; set SMLM_TEST_FULL=true to enable"
 end
