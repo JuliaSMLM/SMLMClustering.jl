@@ -37,5 +37,8 @@ struct _DummyClusterCfg <: AbstractClusterConfig end
     include("test_dbscan.jl")
     include("test_hierarchical.jl")
     include("test_voronoi.jl")
+    include("test_cluster_statistics.jl")
+    include("test_hopkins.jl")
+    include("test_voronoi_density.jl")
 
 end

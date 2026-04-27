@@ -5,7 +5,13 @@ source is the docstrings in `src/`. See `README.md` for user-facing narrative.
 
 ---
 
-## Entry point
+## Entry points
+
+The package exposes two parallel entry points:
+- **`cluster(smld, cfg)`** — labeling backends (DBSCAN, Hierarchical, Voronoi). Writes per-emitter cluster labels onto a deep-copied SMLD.
+- **`cluster_statistics(smld, cfg)`** — read-only spatial-statistic backends (Hopkins, ...). Returns the input SMLD reference unchanged.
+
+See "Sibling entry point — `cluster_statistics`" below for the full asymmetry table.
 
 ### `cluster(smld, cfg) -> (smld_out, info)`
 
@@ -201,6 +207,9 @@ run after FrameConnect / BaGoL (which use `track_id`, leaving `id` free).
 | `Clustering` | `dbscan`, `hclust`, `cutree` |
 | `Distances` | `pairwise(Euclidean(), X; dims=2)` for hierarchical distance matrix |
 | `DelaunayTriangulation` | Voronoi tessellation and Delaunay adjacency |
+| `NearestNeighbors` | KDTree NN queries for the Hopkins backend |
+| `Random` | Seeded RNG (`Xoshiro`) for reproducible Hopkins repeats |
+| `Statistics` | `median` for the Voronoi-density summary statistic |
 
 ---
 
@@ -209,3 +218,126 @@ run after FrameConnect / BaGoL (which use `track_id`, leaving `id` free).
 - **HDBSCANConfig** — slot reserved; no lightweight pure-Julia HDBSCAN library exists
   as of 2026-04-17. See `KNOWLEDGE_BASE.md` D1 for details. Monitor
   `Clustering.jl` issue #139.
+
+---
+
+## Sibling entry point — `cluster_statistics`
+
+`cluster_statistics(smld, cfg) -> (smld, ClusterStatisticsInfo)` is a **read-only**
+sibling to `cluster()` for spatial-statistic backends (clustering tendency, density
+diagnostics, etc.). The two interfaces are intentionally asymmetric:
+
+| Aspect | `cluster()` | `cluster_statistics()` |
+|--------|-------------|------------------------|
+| Writes labels? | Yes (`emitter.id`) | No |
+| Input SMLD | Deep-copied (V9) | Pass-through (same reference) |
+| Result info | `ClusterInfo` | `ClusterStatisticsInfo` |
+| Abstract supertype | `AbstractClusterConfig` | `AbstractStatisticsConfig` |
+
+Both return a `(smld, info)` tuple for ecosystem symmetry, but the SMLD returned
+by `cluster_statistics` is `===` the input — no allocation, no mutation.
+
+### `AbstractStatisticsConfig <: SMLMData.AbstractSMLMConfig`
+
+Abstract supertype. Every spatial-statistic backend defines a concrete `*Config` subtype.
+
+Shared fields expected on every concrete subtype:
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `use_3d` | `Bool` | `false` | Include z-coordinate |
+| `per_dataset` | `Bool` | `true` | Compute per dataset and aggregate |
+
+### `ClusterStatisticsInfo <: SMLMData.AbstractSMLMInfo`
+
+**Source:** `src/types.jl`
+
+**Fields:**
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `n_locs_in` | `Int` | Input localization count |
+| `statistic` | `Float64` | Primary scalar result |
+| `statistic_name` | `Symbol` | Identifier for `statistic` (`:hopkins`, ...) |
+| `algorithm` | `Symbol` | Backend identifier (`:hopkins`, ...) |
+| `elapsed_s` | `Float64` | Wall-clock time (seconds) |
+| `extras` | `Dict{Symbol,Any}` | Vector / supplementary outputs |
+
+**Convention for vector-valued backends:** put a meaningful summary scalar in
+`statistic` (mean, median, ...) and the full vector in `extras` under a
+descriptive key. Hopkins per-dataset vector goes under `:hopkins_per_dataset`.
+
+**`show`:** `ClusterStatisticsInfo(:name=value, n_locs_in=N, algorithm=:X, T ms)`
+
+### `HopkinsConfig <: AbstractStatisticsConfig`
+
+**Source:** `src/backends/hopkins.jl`
+**Algorithm:** Hopkins clustering-tendency statistic (sample-based)
+**Library:** NearestNeighbors.jl (KDTree)
+
+**Fields:**
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `n_samples` | `Int` | `20` | Reference / sampled point count per repeat |
+| `random_repeats` | `Int` | `1` | Independent repeats to average |
+| `seed` | `Union{Int,Nothing}` | `nothing` | RNG seed for reproducibility |
+| `use_3d` | `Bool` | `false` | Include z-coordinate |
+| `per_dataset` | `Bool` | `true` | Compute per dataset and aggregate |
+
+**Validation:** `n_samples >= 1`, `random_repeats >= 1`, `n_samples <= n_points` per group
+(violations within a group return NaN for that group rather than erroring).
+
+**Returned info:**
+- `statistic`: mean H across datasets when `per_dataset=true`, single H when `false`.
+- `extras[:hopkins_per_dataset]`: `Vector{Float64}` of per-dataset H (only populated when `per_dataset=true`).
+
+**Interpretation:**
+- `H ≈ 0.5` — uniform / Poisson-consistent
+- `H → 1.0` — strong clustering tendency
+- `H → 0.0` — anti-clustering / regular spacing
+
+**Edge cases:** empty group / `n_samples > n_points` / degenerate (zero-extent)
+bbox → group H is `NaN`. Aggregate `statistic` is the mean of non-NaN per-dataset
+values; if all groups are NaN, `statistic` is NaN.
+
+**Constructor:**
+```julia
+HopkinsConfig()
+HopkinsConfig(n_samples=50, random_repeats=10, seed=1)
+```
+
+### `VoronoiDensityConfig <: AbstractStatisticsConfig`
+
+**Source:** `src/backends/voronoi_density.jl`
+**Algorithm:** Per-emitter Voronoi cell area → local density `ρᵢ = 1/Aᵢ`
+**Library:** DelaunayTriangulation.jl, Statistics
+
+**Fields:**
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `use_3d` | `Bool` | `false` | **Must be `false`** — 3D Voronoi not supported (V7) |
+| `per_dataset` | `Bool` | `true` | Tessellate each dataset independently |
+
+**Validation:** `use_3d == false` (raises `ArgumentError` directing to `VoronoiConfig` docstring otherwise).
+
+**Returned info:**
+- `statistic`: median density across all emitters that received a valid Voronoi cell (μm⁻²).
+- `statistic_name`: `:median_density`.
+- `algorithm`: `:voronoi_density`.
+- `extras[:density_per_emitter]`: `Vector{Float64}` of length `n_locs_in`, in **original emitter order** (NOT grouped by dataset). Units: μm⁻². Emitters in groups smaller than 3 receive `NaN`.
+- `extras[:area_per_emitter]`: `Vector{Float64}` of length `n_locs_in`, same ordering. Units: μm².
+
+**Edge cases:**
+- Groups with fewer than 3 points: those emitters receive `NaN` density and area; other groups proceed normally.
+- Empty SMLD: empty per-emitter vectors, `statistic = NaN`.
+- Group with exact-duplicate `(x, y)` coordinates: `ArgumentError` raised before triangulation (mirrors `VoronoiConfig`'s guard).
+
+**Use case:** intended for downstream callers running their own thresholding on the per-emitter density (Otsu / GMM on `log ρ`, fixed cutoff, etc.) — e.g. cell-structure masking on dense membrane regions before per-cell clustering.
+
+**Constructor:**
+```julia
+VoronoiDensityConfig()
+VoronoiDensityConfig(per_dataset=false)
+```

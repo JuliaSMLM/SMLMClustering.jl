@@ -21,14 +21,20 @@ module SMLMClustering
 using SMLMData
 using Clustering
 using Distances
+using NearestNeighbors
+using Random
 
 export AbstractClusterConfig, ClusterInfo, cluster,
-       DBSCANConfig, HierarchicalConfig, VoronoiConfig
+       DBSCANConfig, HierarchicalConfig, VoronoiConfig,
+       AbstractStatisticsConfig, ClusterStatisticsInfo, cluster_statistics,
+       HopkinsConfig, VoronoiDensityConfig
 
 include("types.jl")
 include("utils.jl")
 include("backends/dbscan.jl")
 include("backends/hierarchical.jl")
 include("backends/voronoi.jl")
+include("backends/hopkins.jl")
+include("backends/voronoi_density.jl")
 
 end
