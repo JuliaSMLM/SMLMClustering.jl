@@ -25,13 +25,14 @@ using NearestNeighbors
 using Random
 
 export AbstractClusterConfig, ClusterInfo, cluster,
-       DBSCANConfig, HierarchicalConfig, VoronoiConfig,
+       DBSCANConfig, HDBSCANConfig, HierarchicalConfig, VoronoiConfig,
        AbstractStatisticsConfig, ClusterStatisticsInfo, cluster_statistics,
        HopkinsConfig, VoronoiDensityConfig
 
 include("types.jl")
 include("utils.jl")
 include("backends/dbscan.jl")
+include("backends/hdbscan.jl")
 include("backends/hierarchical.jl")
 include("backends/voronoi.jl")
 include("backends/hopkins.jl")
