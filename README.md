@@ -106,6 +106,44 @@ variance-increase cost (roughly μm²) and is passed through without conversion 
 there is no meaningful nm interpretation under Ward, which is why `n_clusters`
 is usually the cleaner choice for Ward.
 
+### MRF density-regime
+
+Adaptive-density clustering for data with multiple density regimes (e.g.
+tight ~25 nm aggregates coexisting with μm-scale extended structure).
+Avoids the single-ε problem by inferring per-emitter regime labels from
+the local Voronoi density via a Gaussian-mixture fit, then smoothing
+labels over the Delaunay (or k-NN) neighbor graph using a multi-class
+Potts MRF before extracting clusters via connected components on the
+foreground.
+
+```julia
+# Default 2-regime auto-tuning: GMM finds the foreground/background split
+# per dataset; smoothness λ is auto-set; CC over Delaunay neighbors.
+cfg = MRFDensityClusterConfig(min_points = 10)
+(smld_out, info) = cluster(smld, cfg)
+regimes = smld_out.metadata["mrf_regime_per_emitter"]   # 0..n_regimes per emitter
+
+# 3-regime with manual thresholds (e.g. learned from training data).
+cfg = MRFDensityClusterConfig(
+    n_regimes         = 3,
+    regime_thresholds = [3.5, 5.0],   # log-density splits, length n_regimes - 1
+    min_points        = 10,
+)
+```
+
+Lowest regime is treated as background/noise; foreground = regime ≥ 2 is
+fed to connected components. Per-dataset by default — each cell gets its
+own GMM fit, so the algorithm auto-adapts to whatever density scale that
+cell happens to live at.
+
+**2D only.** `use_3d = true` raises `ArgumentError`.
+Groups with fewer than 3 points are tagged all-noise.
+Groups containing exact-duplicate (x,y) coordinates raise `ArgumentError`.
+
+Output metadata: `mrf_regime_per_emitter` (per-emitter regime ID, original
+emitter order), `mrf_lambda_used` (per-group smoothness weight),
+`mrf_regime_means` (per-group GMM component means in log-density space).
+
 ## Spatial-statistic backend (`cluster_statistics`)
 
 ### Hopkins

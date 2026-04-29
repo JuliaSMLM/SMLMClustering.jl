@@ -49,6 +49,7 @@ struct _DummyClusterCfg <: AbstractClusterConfig end
     include("test_cluster_statistics.jl")
     include("test_hopkins.jl")
     include("test_voronoi_density.jl")
+    include("test_mrf_density.jl")
 
 end
 

@@ -76,3 +76,39 @@ function _build_output(smld::SMLMData.BasicSMLD, remove_unclustered::Bool)
     SMLMData.BasicSMLD(out_emitters, smld.camera, smld.n_frames,
                        smld.n_datasets, smld.metadata)
 end
+
+# Per-emitter Voronoi cell areas (μm²) for a vector of 2D emitters.
+# Returns `(areas, tri)` where `areas` is a Vector{Float64} of length n in the
+# same order as `emitters`, and `tri` is the underlying DelaunayTriangulation
+# (so callers can reuse it for the Delaunay-adjacency edge set).
+#
+# Behavior:
+# - n < 3: returns `(fill(NaN, n), nothing)` — no tessellation possible.
+# - duplicate (x,y): raises `ArgumentError` before triangulation (mirrors
+#   `VoronoiConfig`'s guard — duplicate generators cause `get_area` to throw
+#   `KeyError`).
+# - 3D not supported here; this helper is 2D-only (DelaunayTriangulation.jl
+#   limitation, V7). Callers must validate `use_3d == false` upstream.
+#
+# Cells are clipped to the convex hull (`voronoi(tri; clip=true)`) so every
+# generator has a finite area; hull cells are smaller than their infinite-plane
+# area (V8 boundary-handling caveat).
+function _voronoi_areas(emitters::AbstractVector{<:SMLMData.AbstractEmitter})
+    n = length(emitters)
+    if n < 3
+        return (fill(NaN, n), nothing)
+    end
+    pts = [(emitters[j].x, emitters[j].y) for j in 1:n]  # μm
+    length(unique(pts)) == n ||
+        throw(ArgumentError(
+            "Voronoi-density helper: group of $n points contains duplicate " *
+            "(x,y) coordinates; deduplicate input localizations before " *
+            "calling this backend."))
+    tri = DelaunayTriangulation.triangulate(pts)
+    vor = DelaunayTriangulation.voronoi(tri; clip = true)
+    areas = Vector{Float64}(undef, n)
+    @inbounds for j in 1:n
+        areas[j] = DelaunayTriangulation.get_area(vor, j)
+    end
+    return (areas, tri)
+end

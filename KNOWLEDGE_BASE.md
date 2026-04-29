@@ -85,6 +85,24 @@ Shared fields on every concrete `*StatisticsConfig` struct: `use_3d::Bool=false`
 
 **Scope:** Applies to all current and future `cluster_statistics(smld, cfg::AbstractStatisticsConfig)` methods. The pass-through guarantee is binding — backends must not mutate the SMLD or its emitters. Future statistic backends (Voronoi density, Ripley K, NND distribution, ...) all subtype `AbstractStatisticsConfig` and follow the summary-scalar+extras convention. NaN is the canonical "couldn't compute on this group" return (empty SMLD, n_samples > n_points, degenerate bbox) — backends never throw on data-shape edge cases that are valid but produce no statistic; argument validation (n_samples ≥ 1, etc.) still throws `ArgumentError` at the boundary.
 
+### V11 — MRF density-regime clustering pipeline (`MRFDensityClusterConfig`)
+
+**Decision:** Adaptive-density clustering pipeline for data with multiple density regimes is structured as four serial steps:
+
+1. **Per-emitter Voronoi density** → log ρᵢ = log(1/Aᵢ). Reuses the helper `_voronoi_areas` in `src/utils.jl` (extracted from `voronoi_density.jl` so both `VoronoiDensityConfig` and `MRFDensityClusterConfig` share the tessellation logic).
+2. **Regime assignment.** Either an explicit `regime_thresholds::Vector{Float64}` of length `n_regimes - 1` (binning, GMM bypassed; per-emitter unary `U[i, k]` is `0` for the matching bin and `1e6` for others), OR an `n_regimes`-component 1D Gaussian mixture EM on log ρ producing unaries `U[i, k] = -log(w_k * N(log_rho[i] | μ_k, σ_k²))`. GMM components are sorted ascending by mean — convention is **regime 1 = lowest density (treated as background/noise) and `n_regimes` = highest density**.
+3. **Multi-class Potts MRF refinement via ICM** over the Delaunay neighbor graph (default, free since step 1 already triangulated) or a symmetrized k-NN graph. Pairwise term `V(xᵢ, xⱼ) = 0 if xᵢ = xⱼ else 1`. Auto-tuned smoothness `λ = max(1e-6, MAD(U_max_i - U_min_i))` per group when `smoothness_lambda === nothing`. ICM iterates until no point changes label or until `icm_iters` is reached. Only `:icm` is supported in v1; `:graph_cuts` is the future-extension slot but raises `ArgumentError` today.
+4. **Connected components** via BFS on the same neighbor graph restricted to foreground nodes (regime ≥ 2). Components below `min_points` are demoted to noise (id = 0).
+
+Per-cluster outputs land in `emitter.id` (V1 convention). MRF-specific outputs go on `smld_out.metadata` (mirrors HDBSCAN's metadata-stamping pattern from `hdbscan.jl`):
+- `metadata["mrf_regime_per_emitter"]::Vector{Int}` — per-emitter regime in 0..`n_regimes`, in original emitter order (0 = ungroupable / group too small / GMM failed).
+- `metadata["mrf_lambda_used"]::Vector{Float64}` — per-group λ actually used, in `_group_by_dataset` order.
+- `metadata["mrf_regime_means"]::Vector{Vector{Float64}}` — per-group GMM means (sorted ascending), filled with `NaN`s when `regime_thresholds` was supplied (signals "manual binning, no fit").
+
+**Evidence:** Direct execution 2026-04-29 landed `MRFDensityClusterConfig` per Keith's design picks (hard regime labels, multi-regime from start, GMM, per-dataset with override). 981/981 tests pass with `SMLM_TEST_FULL=1` (39 new MRF tests covering 2-regime / 3-regime / missing-middle / spurious-small / threshold-override / per_dataset / :knn / determinism / edge cases). Fast tier 161/161 in 33s. Validates the four-step pipeline against synthetic data exhibiting both target failure modes (false-positive small knots in a low-density sea + missing middles in genuine dense regions).
+
+**Scope:** Applies to `MRFDensityClusterConfig` and any future density-regime variants (e.g. graph-cuts inference replacing ICM). 2D only (V7 — DelaunayTriangulation.jl). Lowest-regime-as-noise convention is binding — backends that subclass this pipeline must not invert it without explicit user-facing rename. The auto-λ heuristic (MAD of unary range) is data-scale-free and works without dataset-specific tuning; users with strong priors override via `smoothness_lambda`.
+
 ---
 
 ## Dead Ends

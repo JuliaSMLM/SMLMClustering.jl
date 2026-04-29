@@ -21,11 +21,13 @@ module SMLMClustering
 using SMLMData
 using Clustering
 using Distances
+using DelaunayTriangulation
 using NearestNeighbors
 using Random
 
 export AbstractClusterConfig, ClusterInfo, cluster,
        DBSCANConfig, HDBSCANConfig, HierarchicalConfig, VoronoiConfig,
+       MRFDensityClusterConfig,
        AbstractStatisticsConfig, ClusterStatisticsInfo, cluster_statistics,
        HopkinsConfig, VoronoiDensityConfig
 
@@ -37,5 +39,6 @@ include("backends/hierarchical.jl")
 include("backends/voronoi.jl")
 include("backends/hopkins.jl")
 include("backends/voronoi_density.jl")
+include("backends/mrf_density.jl")
 
 end

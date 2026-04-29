@@ -121,6 +121,64 @@ HierarchicalConfig(n_clusters=3, linkage=:ward)           # Ward, by count
 
 ---
 
+### `MRFDensityClusterConfig <: AbstractClusterConfig`
+
+**Source:** `src/backends/mrf_density.jl`
+**Algorithm:** Voronoi density → multi-component GMM → multi-class Potts MRF (ICM) → CC on foreground
+**Library:** DelaunayTriangulation.jl, NearestNeighbors.jl, Statistics
+
+Adaptive-density clustering for data with multiple density regimes (e.g.
+tight ~25 nm aggregates next to μm-scale extended structure). The MRF
+smoothness term enforces spatial coherence: borderline middle points stay
+foreground, isolated tight knots in a low-density sea get demoted to
+background. No global ε, no per-dataset density tuning.
+
+**Fields:**
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `n_regimes` | `Int` | `2` | Number of density regimes (lowest = noise/background) |
+| `regime_thresholds` | `Union{Nothing, Vector{Float64}}` | `nothing` | Optional explicit log-density thresholds (length `n_regimes - 1`, sorted asc); when set, GMM is bypassed |
+| `smoothness_lambda` | `Union{Nothing, Float64}` | `nothing` | MRF smoothness weight; when `nothing`, auto-tuned per group via MAD of unary range |
+| `graph_kind` | `Symbol` | `:delaunay` | Neighbor graph: `:delaunay` (free, reuses tessellation) or `:knn` |
+| `graph_k` | `Int` | `8` | k for kNN graph (used only with `graph_kind=:knn`) |
+| `inference` | `Symbol` | `:icm` | MRF inference; only `:icm` supported in v1 |
+| `icm_iters` | `Int` | `50` | Maximum ICM passes (early termination on convergence) |
+| `min_points` | `Int` | `5` | Minimum cluster size after CC |
+| `use_3d` | `Bool` | `false` | **Must be `false`** — 3D not supported (V7) |
+| `per_dataset` | `Bool` | `true` | Run pipeline per dataset (independent GMM fit per cell) |
+| `remove_unclustered` | `Bool` | `false` | Drop noise emitters |
+
+**Validation:** `n_regimes >= 2`, `regime_thresholds` (when set) length =
+`n_regimes - 1` and sorted ascending, `graph_kind in (:delaunay, :knn)`,
+`inference === :icm`, `graph_k >= 1`, `icm_iters >= 1`, `min_points >= 1`,
+`smoothness_lambda > 0` when set, `use_3d == false`.
+
+**Scalability:** dominated by Voronoi tessellation (O(n log n)) and ICM
+passes (O(`icm_iters` × n × `n_regimes` × avg-degree)). Comparable to
+DBSCAN in practice for n up to 100k per group.
+
+**Supports 3D:** no. `use_3d = true` raises `ArgumentError` directing users
+to `DBSCANConfig` or `HierarchicalConfig`.
+
+**Output metadata** (in `smld_out.metadata`):
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `"mrf_regime_per_emitter"` | `Vector{Int}` | Per-emitter regime 0..`n_regimes` (0 = ungroupable, 1 = lowest density, `n_regimes` = highest), in original emitter order |
+| `"mrf_lambda_used"` | `Vector{Float64}` | Per-group λ actually used (auto or explicit), in `_group_by_dataset` order |
+| `"mrf_regime_means"` | `Vector{Vector{Float64}}` | Per-group GMM means (sorted ascending, log-density space). When `regime_thresholds` was provided, the per-group entry is filled with `NaN`s |
+
+**Constructor:**
+```julia
+MRFDensityClusterConfig()                                          # 2-regime, GMM auto
+MRFDensityClusterConfig(n_regimes = 3, min_points = 10)
+MRFDensityClusterConfig(n_regimes = 3, regime_thresholds = [3.5, 5.0])
+MRFDensityClusterConfig(graph_kind = :knn, graph_k = 12, smoothness_lambda = 0.5)
+```
+
+---
+
 ### `VoronoiConfig <: AbstractClusterConfig`
 
 **Source:** `src/backends/voronoi.jl`
@@ -175,7 +233,7 @@ VoronoiConfig(density_factor=3.0, min_points=10)
 | `n_noise` | `Int` | Localizations with `id == 0` |
 | `n_clusters` | `Int` | Distinct clusters formed |
 | `cluster_sizes` | `Vector{Int}` | Size of cluster `k` at index `k`; length = `n_clusters` |
-| `algorithm` | `Symbol` | `:dbscan`, `:voronoi`, or `:hierarchical` |
+| `algorithm` | `Symbol` | `:dbscan`, `:hdbscan`, `:voronoi`, `:hierarchical`, or `:mrf_density` |
 | `elapsed_s` | `Float64` | Wall-clock time of the `cluster` call (seconds) |
 
 **`cluster_sizes` convention:** When `per_dataset = true`, sizes from all datasets are

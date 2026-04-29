@@ -96,25 +96,15 @@ function cluster_statistics(smld::SMLMData.BasicSMLD, cfg::VoronoiDensityConfig)
         n < 3 && continue  # those emitters keep NaN
 
         sub = view(smld.emitters, idxs)
-        pts = [(sub[j].x, sub[j].y) for j in 1:n]  # μm
-
-        # Mirror voronoi.jl's duplicate-coord guard: get_area raises KeyError
-        # on exact-coincident generators, so detect and rethrow as a clean
-        # ArgumentError before any tessellation work.
-        length(unique(pts)) == n ||
-            throw(ArgumentError(
-                "VoronoiDensityConfig: group of $n points contains duplicate " *
-                "(x,y) coordinates; deduplicate input localizations before " *
-                "calling cluster_statistics()."))
-
-        tri = DelaunayTriangulation.triangulate(pts)
-        vor = DelaunayTriangulation.voronoi(tri; clip = true)
+        # `_voronoi_areas` raises ArgumentError on exact-duplicate (x,y) pairs
+        # (mirrors voronoi.jl's guard); returns a Vector{Float64} of length n.
+        areas, _ = _voronoi_areas(sub)
 
         @inbounds for j in 1:n
-            a = DelaunayTriangulation.get_area(vor, j)
+            a = areas[j]
             i = idxs[j]
             area_per_emitter[i] = a
-            density_per_emitter[i] = a > 0 ? 1.0 / a : NaN
+            density_per_emitter[i] = (isfinite(a) && a > 0) ? 1.0 / a : NaN
         end
     end
 

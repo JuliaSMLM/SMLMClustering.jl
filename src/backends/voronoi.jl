@@ -12,8 +12,6 @@
 # Uses DelaunayTriangulation.jl (pure Julia, 2D). 3D clustering is not
 # supported — `use_3d=true` raises an error.
 
-using DelaunayTriangulation
-
 """
     VoronoiConfig(; density_factor=2.0, min_points=5, use_3d=false,
                     per_dataset=true, remove_unclustered=false)
