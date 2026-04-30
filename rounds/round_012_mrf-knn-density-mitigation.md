@@ -4,6 +4,15 @@
 **Status:** done
 **Priority worked on:** Priority 1 — Diagnose MRF interior false-negative band
 
+## Output files to review
+
+Visual + tabular outputs from this round. Inspect to confirm the headline numbers match the picture:
+
+- `dev/scripts/output/mrf_interior_diagnosis.png` (1.7 MB, 6-panel) — **primary visual artifact.** Row 1 = density distributions (Voronoi vs kNN); row 2 = per-emitter error maps over the synthetic ROI (cyan = FN, orange = FP); row 3 = signed-distance histograms (FN events vs distance to nearest patch boundary). Look at row 2 to see the cyan-FN band collapse from interior to edge between voronoi and kNN columns. Row 3 confirms the FN distribution shifted from peaking at -0.2 μm (deep interior) to peaking near 0 μm (boundary).
+- `dev/scripts/output/mrf_interior_diagnosis.csv` (13 rows) — per-patch FN-rate table, voronoi vs kNN columns, sortable for the "which patch geometries benefited most" question.
+- `dev/scripts/output/mrf_eval.png` (2.7 MB) — v1 Voronoi baseline render (pre-existing, anchor for comparison). The cyan-FN saturation in the interior of the diagonal thin fibers and the elliptical patches is what kNN now eliminates.
+- `dev/scripts/diagnose_mrf_interior.jl` (14 KB) — diagnostic script source, useful if rerunning with different `density_k` or other parameters to characterize sensitivity (the operational-bound k=8 vs k=20 finding was discovered this way).
+
 ## Hypothesis
 
 Voronoi cell linear scale (~30-40 nm at 1000/μm² density) is comparable to thin-fiber widths (50-600 nm for AR 5-20 rectangles in the synthetic A431-mimic). Cells that span the patch boundary inflate, so the GMM regime split sees patch-interior emitters at log-densities indistinguishable from background, producing a concentrated false-negative band visible in `dev/scripts/output/mrf_eval.png`. A kNN density estimator `ρ_k = k / (π · r_k²)` integrates over k nearest neighbors and reduces noise from σ_log ≈ 1 (single-cell Voronoi) to σ_log ≈ 1/√k. Expected: bringing P6(c) forward — adding `density_estimator=:knn` to `MRFDensityClusterConfig` — should clear the 85% headline accuracy bar AND measurably shrink the per-patch interior FN-rate vs the v1 79.85% Voronoi baseline.
