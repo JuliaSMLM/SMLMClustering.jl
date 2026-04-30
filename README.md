@@ -111,10 +111,9 @@ is usually the cleaner choice for Ward.
 Adaptive-density clustering for data with multiple density regimes (e.g.
 tight ~25 nm aggregates coexisting with μm-scale extended structure).
 Avoids the single-ε problem by inferring per-emitter regime labels from
-the local Voronoi density via a Gaussian-mixture fit, then smoothing
-labels over the Delaunay (or k-NN) neighbor graph using a multi-class
-Potts MRF before extracting clusters via connected components on the
-foreground.
+local density via a Gaussian-mixture fit, then smoothing labels over the
+Delaunay (or k-NN) neighbor graph using a multi-class Potts MRF before
+extracting clusters via connected components on the foreground.
 
 ```julia
 # Default 2-regime auto-tuning: GMM finds the foreground/background split
@@ -129,6 +128,19 @@ cfg = MRFDensityClusterConfig(
     regime_thresholds = [3.5, 5.0],   # log-density splits, length n_regimes - 1
     min_points        = 10,
 )
+
+# Calibrated soft emissions: fit on a calibration ROI, then apply to queries.
+# Unlike hard thresholds, borderline interior points can still be rescued by
+# high-density neighbors through the MRF smoothness term.
+gaussians = calibrate_regime_gaussians(calibration_smld;
+                                       n_regimes = 2,
+                                       density_estimator = :knn,
+                                       density_k = 20)
+cfg = MRFDensityClusterConfig(
+    density_estimator = :knn,
+    density_k         = 20,
+    regime_gaussians  = gaussians,
+)
 ```
 
 Lowest regime is treated as background/noise; foreground = regime ≥ 2 is
@@ -142,7 +154,7 @@ Groups containing exact-duplicate (x,y) coordinates raise `ArgumentError`.
 
 Output metadata: `mrf_regime_per_emitter` (per-emitter regime ID, original
 emitter order), `mrf_lambda_used` (per-group smoothness weight),
-`mrf_regime_means` (per-group GMM component means in log-density space).
+`mrf_regime_means` (per-group Gaussian component means in log-density space).
 
 #### When it works
 
@@ -161,11 +173,13 @@ Headline accuracy by density ratio (high / low):
 **Use kNN-MRF when the density ratio is ≥ 2×.** Operational floor: ratio
 ≥ 1.65× clears 75% accuracy; ratio ≥ 1.85× clears 85%.
 
-**Use voronoi-GMM (`VoronoiDensityConfig` + your own GMM split, or
-external thresholding on the per-emitter density extra) when the density
-ratio is below 2×.** At very low contrast the Potts smoothness term
-amplifies a degenerate GMM regime split into uniform misclassification —
-voronoi-GMM is per-emitter-independent and degrades more gracefully.
+**Use calibrated soft emissions (`calibrate_regime_gaussians` +
+`regime_gaussians`) when calibration ROIs are available and the density ratio
+is below 2×.** This skips per-ROI GMM degeneracy while keeping soft unary
+costs, so the MRF can still fill borderline interior points. If no calibration
+ROI exists, use voronoi-GMM (`VoronoiDensityConfig` + your own GMM split, or
+external thresholding on the per-emitter density extra) because it degrades
+more gracefully than a low-contrast auto-MRF collapse.
 
 **Use the kNN density estimator (`density_estimator = :knn, density_k = 20`)
 for elongated patches with widths comparable to the local nearest-neighbor

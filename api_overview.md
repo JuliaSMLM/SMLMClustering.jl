@@ -124,7 +124,7 @@ HierarchicalConfig(n_clusters=3, linkage=:ward)           # Ward, by count
 ### `MRFDensityClusterConfig <: AbstractClusterConfig`
 
 **Source:** `src/backends/mrf_density.jl`
-**Algorithm:** Voronoi density → multi-component GMM → multi-class Potts MRF (ICM) → CC on foreground
+**Algorithm:** local density → soft regime unaries → multi-class Potts MRF (ICM) → CC on foreground
 **Library:** DelaunayTriangulation.jl, NearestNeighbors.jl, Statistics
 
 Adaptive-density clustering for data with multiple density regimes (e.g.
@@ -138,7 +138,10 @@ background. No global ε, no per-dataset density tuning.
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
 | `n_regimes` | `Int` | `2` | Number of density regimes (lowest = noise/background) |
-| `regime_thresholds` | `Union{Nothing, Vector{Float64}}` | `nothing` | Optional explicit log-density thresholds (length `n_regimes - 1`, sorted asc); when set, GMM is bypassed |
+| `regime_thresholds` | `Union{Nothing, Vector{Float64}}` | `nothing` | Optional explicit log-density thresholds (length `n_regimes - 1`, sorted asc); hard-bins labels and bypasses GMM |
+| `regime_gaussians` | `Union{Nothing, NamedTuple}` | `nothing` | Optional calibrated `(means, vars, weights)` Gaussian emissions in log-density space; bypasses GMM while preserving soft unaries |
+| `density_estimator` | `Symbol` | `:voronoi` | Per-emitter density estimator: `:voronoi` or `:knn` |
+| `density_k` | `Int` | `20` | k for `density_estimator=:knn` |
 | `smoothness_lambda` | `Union{Nothing, Float64}` | `nothing` | MRF smoothness weight; when `nothing`, auto-tuned per group via MAD of unary range |
 | `graph_kind` | `Symbol` | `:delaunay` | Neighbor graph: `:delaunay` (free, reuses tessellation) or `:knn` |
 | `graph_k` | `Int` | `8` | k for kNN graph (used only with `graph_kind=:knn`) |
@@ -149,8 +152,11 @@ background. No global ε, no per-dataset density tuning.
 | `per_dataset` | `Bool` | `true` | Run pipeline per dataset (independent GMM fit per cell) |
 | `remove_unclustered` | `Bool` | `false` | Drop noise emitters |
 
-**Validation:** `n_regimes >= 2`, `regime_thresholds` (when set) length =
-`n_regimes - 1` and sorted ascending, `graph_kind in (:delaunay, :knn)`,
+**Validation:** `n_regimes >= 2`, at most one of `regime_thresholds` /
+`regime_gaussians` set, `regime_thresholds` (when set) length =
+`n_regimes - 1` and sorted ascending, `regime_gaussians` (when set) has sorted
+finite means plus positive variances/weights, `density_estimator in
+(:voronoi, :knn)`, `density_k >= 1`, `graph_kind in (:delaunay, :knn)`,
 `inference === :icm`, `graph_k >= 1`, `icm_iters >= 1`, `min_points >= 1`,
 `smoothness_lambda > 0` when set, `use_3d == false`.
 
@@ -167,13 +173,15 @@ to `DBSCANConfig` or `HierarchicalConfig`.
 |-----|------|---------|
 | `"mrf_regime_per_emitter"` | `Vector{Int}` | Per-emitter regime 0..`n_regimes` (0 = ungroupable, 1 = lowest density, `n_regimes` = highest), in original emitter order |
 | `"mrf_lambda_used"` | `Vector{Float64}` | Per-group λ actually used (auto or explicit), in `_group_by_dataset` order |
-| `"mrf_regime_means"` | `Vector{Vector{Float64}}` | Per-group GMM means (sorted ascending, log-density space). When `regime_thresholds` was provided, the per-group entry is filled with `NaN`s |
+| `"mrf_regime_means"` | `Vector{Vector{Float64}}` | Per-group Gaussian means (sorted ascending, log-density space). When hard `regime_thresholds` were provided, the per-group entry is filled with `NaN`s |
 
 **Constructor:**
 ```julia
 MRFDensityClusterConfig()                                          # 2-regime, GMM auto
 MRFDensityClusterConfig(n_regimes = 3, min_points = 10)
 MRFDensityClusterConfig(n_regimes = 3, regime_thresholds = [3.5, 5.0])
+gaussians = calibrate_regime_gaussians(cal_smld; density_estimator = :knn)
+MRFDensityClusterConfig(density_estimator = :knn, regime_gaussians = gaussians)
 MRFDensityClusterConfig(graph_kind = :knn, graph_k = 12, smoothness_lambda = 0.5)
 ```
 

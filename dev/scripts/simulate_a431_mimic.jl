@@ -95,16 +95,18 @@ function placement_ok(p::Patch, placed::Vector{Patch}, rng)
 end
 
 # Draw one patch (kind sampled), random angle, random center inside active area.
-function sample_patch(rng, kind::Symbol)
+# patch_scale multiplies all linear dimensions; default 1.0 reproduces the original
+# rect length [1,3] / ellipse semi-major [0.5,1.0] ranges.
+function sample_patch(rng, kind::Symbol; patch_scale::Float64 = 1.0)
     if kind === :rect
-        L = rand(rng) * 2.0 + 1.0           # length in [1, 3]
-        ar = rand(rng) * 15.0 + 5.0         # aspect ratio in [5, 20]
+        L = (rand(rng) * 2.0 + 1.0) * patch_scale       # length in [scale, 3*scale]
+        ar = rand(rng) * 15.0 + 5.0                     # aspect ratio in [5, 20]
         W = L / ar
         a = L / 2; b = W / 2
         area = L * W
     else
-        a = rand(rng) * 0.5 + 0.5           # semi-major in [0.5, 1.0]
-        b = a * (rand(rng) * 0.5 + 0.5)     # semi-minor in [0.5*a, a]
+        a = (rand(rng) * 0.5 + 0.5) * patch_scale       # semi-major in [0.5*scale, scale]
+        b = a * (rand(rng) * 0.5 + 0.5)                 # semi-minor in [0.5*a, a]
         area = π * a * b
     end
     theta = rand(rng) * 2π
@@ -112,14 +114,14 @@ function sample_patch(rng, kind::Symbol)
     return Patch(kind, 0.0, 0.0, a, b, theta, area)
 end
 
-function place_patches(rng)
+function place_patches(rng; patch_scale::Float64 = 1.0)
     placed = Patch[]
     placed_area = 0.0
     target_area = TARGET_HIGH_FRAC * ACTIVE_AREA
     failed_attempts = 0
     while placed_area < target_area
         kind = rand(rng) < 0.6 ? :rect : :ellipse
-        p_template = sample_patch(rng, kind)
+        p_template = sample_patch(rng, kind; patch_scale = patch_scale)
         success = false
         for _ in 1:100
             # Roll center until bbox fits in active area.
@@ -265,10 +267,11 @@ end
 function simulate_dataset(; rho_low::Float64 = RHO_LOW,
                           rho_high_bonus::Float64 = RHO_HIGH_BONUS,
                           seed::Int = SIM_SEED,
+                          patch_scale::Float64 = 1.0,
                           verbose::Bool = false)
     rng = Xoshiro(seed)
-    verbose && println("[simulate] placing patches…")
-    patches, placed_area = place_patches(rng)
+    verbose && println("[simulate] placing patches… (patch_scale=$patch_scale)")
+    patches, placed_area = place_patches(rng; patch_scale = patch_scale)
     actual_high_frac = placed_area / ACTIVE_AREA
     verbose && println("  placed $(length(patches)) patches; cumulative area = $(round(placed_area, digits=3)) μm² ",
                        "($(round(100*actual_high_frac, digits=1))% of active area)")
@@ -282,6 +285,7 @@ function simulate_dataset(; rho_low::Float64 = RHO_LOW,
                      n_patches = length(patches),
                      actual_high_area_frac = actual_high_frac,
                      rho_low = rho_low, rho_high_bonus = rho_high_bonus,
+                     patch_scale = patch_scale,
                      density_ratio = (rho_low + rho_high_bonus) / rho_low))
 end
 

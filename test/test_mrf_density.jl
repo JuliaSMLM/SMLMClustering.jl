@@ -13,6 +13,7 @@ using Statistics
         @test cfg isa AbstractClusterConfig
         @test cfg.n_regimes == 2
         @test cfg.regime_thresholds === nothing
+        @test cfg.regime_gaussians === nothing
         @test cfg.density_estimator === :voronoi
         @test cfg.density_k == 20
         @test cfg.smoothness_lambda === nothing
@@ -45,6 +46,10 @@ using Statistics
         cfg4 = MRFDensityClusterConfig(density_estimator = :knn, density_k = 30)
         @test cfg4.density_estimator === :knn
         @test cfg4.density_k == 30
+
+        gaussians = (means = [2.0, 5.0], vars = [0.5, 0.5], weights = [0.7, 0.3])
+        cfg5 = MRFDensityClusterConfig(regime_gaussians = gaussians)
+        @test cfg5.regime_gaussians == gaussians
     end
 
     @testset "argument validation" begin
@@ -66,6 +71,24 @@ using Statistics
         # Unsorted thresholds.
         @test_throws ArgumentError cluster(smld_dummy,
             MRFDensityClusterConfig(n_regimes = 3, regime_thresholds = [5.0, 3.0]))
+        # Calibration override modes are mutually exclusive.
+        @test_throws ArgumentError cluster(smld_dummy,
+            MRFDensityClusterConfig(regime_thresholds = [1.0],
+                                    regime_gaussians = (means = [0.0, 1.0],
+                                                        vars = [1.0, 1.0],
+                                                        weights = [0.5, 0.5])))
+        @test_throws ArgumentError cluster(smld_dummy,
+            MRFDensityClusterConfig(regime_gaussians = (means = [1.0, 0.0],
+                                                        vars = [1.0, 1.0],
+                                                        weights = [0.5, 0.5])))
+        @test_throws ArgumentError cluster(smld_dummy,
+            MRFDensityClusterConfig(regime_gaussians = (means = [0.0, 1.0],
+                                                        vars = [1.0, -1.0],
+                                                        weights = [0.5, 0.5])))
+        @test_throws ArgumentError cluster(smld_dummy,
+            MRFDensityClusterConfig(regime_gaussians = (means = [0.0, 1.0],
+                                                        vars = [1.0, 1.0],
+                                                        weights = [0.5, 0.0])))
     end
 
     @testset "use_3d=true raises ArgumentError" begin
@@ -107,7 +130,27 @@ using Statistics
 
     @testset "exports" begin
         @test :MRFDensityClusterConfig in names(SMLMClustering)
+        @test :calibrate_regime_gaussians in names(SMLMClustering)
         @test :calibrate_regime_thresholds in names(SMLMClustering)
+    end
+
+    @testset "soft Gaussian unaries allow neighbor rescue" begin
+        x = [0.49, 1.0, 1.0]
+        thresholds = [0.5]
+        gaussians = (means = [0.0, 1.0],
+                     vars = [1.0, 1.0],
+                     weights = [0.5, 0.5])
+        adj = [[2, 3], [1, 3], [1, 2]]
+
+        labels_hard = zeros(Int, 3)
+        U_hard = SMLMClustering._unary_from_thresholds(x, thresholds, 2)
+        SMLMClustering._icm_potts!(labels_hard, U_hard, adj, 1.0, 10)
+        @test labels_hard == [1, 2, 2]
+
+        labels_soft = zeros(Int, 3)
+        U_soft = SMLMClustering._unary_from_gmm(x, gaussians)
+        SMLMClustering._icm_potts!(labels_soft, U_soft, adj, 1.0, 10)
+        @test labels_soft == [2, 2, 2]
     end
 
     @testset "calibrate_regime_thresholds: argument validation" begin
@@ -119,6 +162,10 @@ using Statistics
         # Too few emitters for n_regimes.
         smld_tiny = _make_2d_smld([(0.0, 0.0, 1)])
         @test_throws ArgumentError calibrate_regime_thresholds(smld_tiny; n_regimes = 2)
+        @test_throws ArgumentError calibrate_regime_gaussians(smld; n_regimes = 1)
+        @test_throws ArgumentError calibrate_regime_gaussians(smld; density_estimator = :bogus)
+        @test_throws ArgumentError calibrate_regime_gaussians(smld; density_k = 0)
+        @test_throws ArgumentError calibrate_regime_gaussians(smld_tiny; n_regimes = 2)
     end
 
     if SMLM_TEST_FULL
@@ -366,6 +413,15 @@ using Statistics
         @test length(thr) == 1
         @test issorted(thr)
 
+        gaussians = calibrate_regime_gaussians(cal_smld; n_regimes = 2,
+                                                density_estimator = :voronoi)
+        @test keys(gaussians) == (:means, :vars, :weights)
+        @test length(gaussians.means) == 2
+        @test issorted(gaussians.means)
+        @test all(>(0), gaussians.vars)
+        @test all(>(0), gaussians.weights)
+        @test isapprox(sum(gaussians.weights), 1.0; atol = 1e-8)
+
         # Apply the calibrated thresholds on a fresh query SMLD; verify the
         # override path runs to completion and the blob is recovered.
         rng2 = Xoshiro(20260431)
@@ -384,11 +440,24 @@ using Statistics
         means = out.metadata["mrf_regime_means"]
         @test all(isnan, means[1])  # NaN signals "manual binning, no GMM fit"
 
+        cfg_soft = MRFDensityClusterConfig(per_dataset = false,
+                                           regime_gaussians = gaussians,
+                                           min_points = 10)
+        out_soft, info_soft = cluster(query_smld, cfg_soft)
+        @test info_soft.n_clusters >= 1
+        means_soft = out_soft.metadata["mrf_regime_means"]
+        @test isapprox(means_soft[1], gaussians.means; atol = 1e-10)
+
         # 3-regime helper returns 2 thresholds, sorted ascending.
         thr3 = calibrate_regime_thresholds(cal_smld; n_regimes = 3,
                                             density_estimator = :voronoi)
         @test length(thr3) == 2
         @test issorted(thr3)
+
+        gaussians3 = calibrate_regime_gaussians(cal_smld; n_regimes = 3,
+                                                density_estimator = :voronoi)
+        @test length(gaussians3.means) == 3
+        @test issorted(gaussians3.means)
     end
     end  # SMLM_TEST_FULL
 

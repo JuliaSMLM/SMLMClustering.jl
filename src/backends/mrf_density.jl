@@ -8,8 +8,9 @@
 # Pipeline (per group when `per_dataset=true`):
 #   1. Per-emitter Voronoi density ρᵢ = 1/Aᵢ → log ρᵢ.
 #   2. Regime assignment via:
-#       (a) explicit `regime_thresholds` (binning), or
-#       (b) `n_regimes`-component 1D Gaussian mixture EM on log ρ
+#       (a) explicit `regime_thresholds` (hard binning),
+#       (b) calibrated `regime_gaussians` (soft Gaussian unaries), or
+#       (c) `n_regimes`-component 1D Gaussian mixture EM on log ρ
 #           → sorted ascending by mean (regime 1 = lowest density).
 #      Per-emitter unary cost matrix `U[i, k] = -log(w_k * N(log_rho[i] | μ_k, σ_k²))`.
 #   3. Multi-class Potts MRF refinement via Iterated Conditional Modes (ICM)
@@ -33,7 +34,8 @@
 #   GMM component means in log-density space (sorted ascending), in
 #   `_group_by_dataset` order. When `regime_thresholds` is supplied the
 #   per-group entry is filled with `NaN`s of length `n_regimes` to signal
-#   "manual binning, no GMM fit".
+#   "manual hard binning, no Gaussian fit"; when `regime_gaussians` is
+#   supplied, the calibrated means are recorded.
 #
 # 2D only — DelaunayTriangulation.jl does not provide 3D Voronoi (V7).
 
@@ -41,6 +43,7 @@ import Statistics
 
 """
     MRFDensityClusterConfig(; n_regimes=2, regime_thresholds=nothing,
+                              regime_gaussians=nothing,
                               density_estimator=:voronoi, density_k=20,
                               smoothness_lambda=nothing,
                               graph_kind=:delaunay, graph_k=8,
@@ -78,7 +81,13 @@ patch-interior detection at the cost of some boundary blur. Default
   background/noise; higher regimes form the foreground.
 - `regime_thresholds::Union{Nothing, Vector{Float64}} = nothing`: optional
   explicit log-density thresholds, length `n_regimes - 1`, sorted ascending.
-  When provided, GMM is bypassed and points are binned directly.
+  When provided, GMM is bypassed and points are binned directly with hard
+  unaries. This is useful as a conservative low-contrast stabilizer, but
+  borderline points cannot be rescued by spatial neighbors.
+- `regime_gaussians::Union{Nothing, NamedTuple} = nothing`: optional calibrated
+  Gaussian emission model `(means, vars, weights)` in log-density space. When
+  provided, GMM is bypassed but soft unaries are preserved, so the Potts prior
+  can still flip borderline interior points.
 - `density_estimator::Symbol = :voronoi`: per-emitter density estimator.
   `:voronoi` uses 1/Voronoi-cell-area; `:knn` uses k / (π · r_k²) where
   `r_k` is the `density_k`-th nearest-neighbor distance.
@@ -118,9 +127,9 @@ HDBSCAN-style metadata stamped onto `smld_out.metadata`:
   in original emitter order. Values: 0 (ungroupable / group too small),
   1 (lowest density / background), ..., `n_regimes` (highest density).
 - `metadata["mrf_lambda_used"]::Vector{Float64}`: per-group λ used.
-- `metadata["mrf_regime_means"]::Vector{Vector{Float64}}`: per-group GMM
-  component means (sorted ascending) in log-density space; vector of
-  `NaN`s when `regime_thresholds` was provided.
+- `metadata["mrf_regime_means"]::Vector{Vector{Float64}}`: per-group Gaussian
+  component means (sorted ascending) in log-density space; vector of `NaN`s
+  when hard `regime_thresholds` were provided.
 
 # Example
 ```julia
@@ -142,6 +151,7 @@ that only exposes per-emitter densities without clustering).
 Base.@kwdef struct MRFDensityClusterConfig <: AbstractClusterConfig
     n_regimes::Int = 2
     regime_thresholds::Union{Nothing, Vector{Float64}} = nothing
+    regime_gaussians::Union{Nothing, NamedTuple{(:means, :vars, :weights)}} = nothing
     density_estimator::Symbol = :voronoi
     density_k::Int = 20
     smoothness_lambda::Union{Nothing, Float64} = nothing
@@ -291,6 +301,97 @@ function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
     end
 end
 
+function _log_density_values(smld::SMLMData.BasicSMLD,
+                             density_estimator::Symbol,
+                             density_k::Int)
+    log_rho = Float64[]
+    if density_estimator === :voronoi
+        areas, _ = _voronoi_areas(smld.emitters)
+        @inbounds for a in areas
+            (isfinite(a) && a > 0) || continue
+            push!(log_rho, log(1.0 / a))
+        end
+    else  # :knn
+        X = _coords_matrix(smld.emitters, false)
+        densities = _knn_density(X, density_k)
+        @inbounds for d in densities
+            (isfinite(d) && d > 0) || continue
+            push!(log_rho, log(d))
+        end
+    end
+    return log_rho
+end
+
+function _validate_regime_gaussians(regime_gaussians, n_regimes::Int, caller::AbstractString)
+    means = Float64.(collect(regime_gaussians.means))
+    vars = Float64.(collect(regime_gaussians.vars))
+    weights = Float64.(collect(regime_gaussians.weights))
+
+    length(means) == n_regimes ||
+        throw(ArgumentError("$caller.regime_gaussians.means length must equal n_regimes = $n_regimes (got $(length(means)))"))
+    length(vars) == n_regimes ||
+        throw(ArgumentError("$caller.regime_gaussians.vars length must equal n_regimes = $n_regimes (got $(length(vars)))"))
+    length(weights) == n_regimes ||
+        throw(ArgumentError("$caller.regime_gaussians.weights length must equal n_regimes = $n_regimes (got $(length(weights)))"))
+    all(isfinite, means) ||
+        throw(ArgumentError("$caller.regime_gaussians.means must be finite"))
+    issorted(means) ||
+        throw(ArgumentError("$caller.regime_gaussians.means must be sorted ascending (got $means)"))
+    all(v -> isfinite(v) && v > 0, vars) ||
+        throw(ArgumentError("$caller.regime_gaussians.vars must be finite and > 0"))
+    all(w -> isfinite(w) && w > 0, weights) ||
+        throw(ArgumentError("$caller.regime_gaussians.weights must be finite and > 0"))
+    weight_sum = sum(weights)
+    weights ./= weight_sum
+    return (means = means, vars = vars, weights = weights)
+end
+
+"""
+    calibrate_regime_gaussians(smld; n_regimes=2, density_estimator=:knn,
+                                density_k=20) -> NamedTuple
+
+Fit a calibrated soft Gaussian emission model in log-density space. The
+returned named tuple has fields `(means, vars, weights)` and can be passed
+directly to `MRFDensityClusterConfig(regime_gaussians = ...)`.
+
+Unlike `regime_thresholds`, this preserves soft unary costs:
+`U[i, k] = -log(w_k * N(log_rho[i] | μ_k, σ_k²))`. That makes the MRF behave
+more like a spatial hidden-state model: an emitter slightly below the
+foreground/background decision boundary can still become foreground when its
+neighbors provide enough Potts support.
+
+See also: [`calibrate_regime_thresholds`](@ref), [`MRFDensityClusterConfig`](@ref).
+"""
+function calibrate_regime_gaussians(smld::SMLMData.BasicSMLD;
+                                      n_regimes::Int = 2,
+                                      density_estimator::Symbol = :knn,
+                                      density_k::Int = 20)
+    n_regimes >= 2 ||
+        throw(ArgumentError("calibrate_regime_gaussians: n_regimes must be ≥ 2 (got $n_regimes)"))
+    density_estimator in (:voronoi, :knn) ||
+        throw(ArgumentError("calibrate_regime_gaussians: density_estimator must be :voronoi or :knn (got $density_estimator)"))
+    density_k >= 1 ||
+        throw(ArgumentError("calibrate_regime_gaussians: density_k must be ≥ 1 (got $density_k)"))
+
+    n = length(smld.emitters)
+    n >= n_regimes ||
+        throw(ArgumentError("calibrate_regime_gaussians: calibration SMLD has $n emitters, need ≥ $n_regimes"))
+
+    log_rho = _log_density_values(smld, density_estimator, density_k)
+    length(log_rho) >= n_regimes ||
+        throw(ArgumentError("calibrate_regime_gaussians: only $(length(log_rho)) valid emitters after filtering NaN densities, need ≥ $n_regimes"))
+
+    fit = _gmm_em_1d(log_rho, n_regimes)
+    fit === nothing &&
+        error("calibrate_regime_gaussians: GMM fit failed on calibration data " *
+              "(variance collapse, all-equal densities, or component starvation). " *
+              "Try a different calibration ROI or fewer regimes.")
+
+    return (means = collect(fit.means),
+            vars = collect(fit.vars),
+            weights = collect(fit.weights))
+end
+
 """
     calibrate_regime_thresholds(smld; n_regimes=2, density_estimator=:knn,
                                  density_k=20) -> Vector{Float64}
@@ -364,44 +465,10 @@ function calibrate_regime_thresholds(smld::SMLMData.BasicSMLD;
                                        n_regimes::Int = 2,
                                        density_estimator::Symbol = :knn,
                                        density_k::Int = 20)
-    n_regimes >= 2 ||
-        throw(ArgumentError("calibrate_regime_thresholds: n_regimes must be ≥ 2 (got $n_regimes)"))
-    density_estimator in (:voronoi, :knn) ||
-        throw(ArgumentError("calibrate_regime_thresholds: density_estimator must be :voronoi or :knn (got $density_estimator)"))
-    density_k >= 1 ||
-        throw(ArgumentError("calibrate_regime_thresholds: density_k must be ≥ 1 (got $density_k)"))
-
-    n = length(smld.emitters)
-    n >= n_regimes ||
-        throw(ArgumentError("calibrate_regime_thresholds: calibration SMLD has $n emitters, need ≥ $n_regimes"))
-
-    # Per-emitter log density across the entire SMLD (no per-dataset split —
-    # the returned thresholds apply uniformly across all groups when used as
-    # MRFDensityClusterConfig.regime_thresholds).
-    log_rho = Float64[]
-    if density_estimator === :voronoi
-        areas, _ = _voronoi_areas(smld.emitters)
-        @inbounds for a in areas
-            (isfinite(a) && a > 0) || continue
-            push!(log_rho, log(1.0 / a))
-        end
-    else  # :knn
-        X = _coords_matrix(smld.emitters, false)
-        densities = _knn_density(X, density_k)
-        @inbounds for d in densities
-            (isfinite(d) && d > 0) || continue
-            push!(log_rho, log(d))
-        end
-    end
-
-    length(log_rho) >= n_regimes ||
-        throw(ArgumentError("calibrate_regime_thresholds: only $(length(log_rho)) valid emitters after filtering NaN densities, need ≥ $n_regimes"))
-
-    fit = _gmm_em_1d(log_rho, n_regimes)
-    fit === nothing &&
-        error("calibrate_regime_thresholds: GMM fit failed on calibration data " *
-              "(variance collapse, all-equal densities, or component starvation). " *
-              "Try a different calibration ROI or fewer regimes.")
+    fit = calibrate_regime_gaussians(smld;
+                                     n_regimes = n_regimes,
+                                     density_estimator = density_estimator,
+                                     density_k = density_k)
 
     # Decision boundary between each pair of consecutive (mean-sorted) components.
     thresholds = Vector{Float64}(undef, n_regimes - 1)
@@ -656,6 +723,11 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::MRFDensityClusterConfig)
     if cfg.smoothness_lambda !== nothing && !(cfg.smoothness_lambda > 0)
         throw(ArgumentError("MRFDensityClusterConfig.smoothness_lambda must be > 0 when set (got $(cfg.smoothness_lambda))"))
     end
+    if cfg.regime_thresholds !== nothing && cfg.regime_gaussians !== nothing
+        throw(ArgumentError(
+            "MRFDensityClusterConfig: regime_thresholds and regime_gaussians " *
+            "are mutually exclusive; set at most one calibration override."))
+    end
     if cfg.regime_thresholds !== nothing
         ts = cfg.regime_thresholds
         length(ts) == cfg.n_regimes - 1 ||
@@ -663,6 +735,8 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::MRFDensityClusterConfig)
         issorted(ts) ||
             throw(ArgumentError("MRFDensityClusterConfig.regime_thresholds must be sorted ascending (got $ts)"))
     end
+    validated_regime_gaussians = cfg.regime_gaussians === nothing ? nothing :
+        _validate_regime_gaussians(cfg.regime_gaussians, cfg.n_regimes, "MRFDensityClusterConfig")
 
     # Per-emitter regime, in original emitter order. 0 = ungroupable.
     regime_per_emitter = zeros(Int, n_in)
@@ -746,6 +820,9 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::MRFDensityClusterConfig)
         if cfg.regime_thresholds !== nothing
             U = _unary_from_thresholds(log_rho_valid, cfg.regime_thresholds, cfg.n_regimes)
             fit_means_for_metadata = fill(NaN, cfg.n_regimes)
+        elseif validated_regime_gaussians !== nothing
+            U = _unary_from_gmm(log_rho_valid, validated_regime_gaussians)
+            fit_means_for_metadata = collect(validated_regime_gaussians.means)
         else
             fit = _gmm_em_1d(log_rho_valid, cfg.n_regimes)
             if fit === nothing

@@ -1,0 +1,13 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SMLMClustering = "5e733723-370a-41a4-ac41-ff3a91b0b806"
+SMLMData = "5488f106-40b8-4660-84c5-84a168990d1b"
+SMLMRender = "d945b928-cd23-4282-89d9-fc086b52682d"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[compat]
+CairoMakie = "0.15.10"
+JLD2 = "0.6.4"
