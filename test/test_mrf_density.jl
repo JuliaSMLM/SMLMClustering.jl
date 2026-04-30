@@ -13,6 +13,8 @@ using Statistics
         @test cfg isa AbstractClusterConfig
         @test cfg.n_regimes == 2
         @test cfg.regime_thresholds === nothing
+        @test cfg.density_estimator === :voronoi
+        @test cfg.density_k == 20
         @test cfg.smoothness_lambda === nothing
         @test cfg.graph_kind === :delaunay
         @test cfg.graph_k == 8
@@ -39,6 +41,10 @@ using Statistics
         cfg3 = MRFDensityClusterConfig(n_regimes = 3,
                                        regime_thresholds = [3.0, 5.0])
         @test cfg3.regime_thresholds == [3.0, 5.0]
+
+        cfg4 = MRFDensityClusterConfig(density_estimator = :knn, density_k = 30)
+        @test cfg4.density_estimator === :knn
+        @test cfg4.density_k == 30
     end
 
     @testset "argument validation" begin
@@ -49,6 +55,8 @@ using Statistics
         @test_throws ArgumentError cluster(smld_dummy, MRFDensityClusterConfig(graph_kind = :bogus))
         @test_throws ArgumentError cluster(smld_dummy, MRFDensityClusterConfig(inference = :graph_cuts))
         @test_throws ArgumentError cluster(smld_dummy, MRFDensityClusterConfig(graph_k = 0))
+        @test_throws ArgumentError cluster(smld_dummy, MRFDensityClusterConfig(density_estimator = :bogus))
+        @test_throws ArgumentError cluster(smld_dummy, MRFDensityClusterConfig(density_k = 0))
         @test_throws ArgumentError cluster(smld_dummy, MRFDensityClusterConfig(icm_iters = 0))
         @test_throws ArgumentError cluster(smld_dummy, MRFDensityClusterConfig(min_points = 0))
         @test_throws ArgumentError cluster(smld_dummy, MRFDensityClusterConfig(smoothness_lambda = -1.0))
@@ -323,6 +331,87 @@ using Statistics
         smld_out, info = cluster(smld, cfg)
         @test all(e -> e.id > 0, smld_out.emitters)
         @test length(smld_out.emitters) == info.n_clustered
+    end
+    end  # SMLM_TEST_FULL
+
+    if SMLM_TEST_FULL
+    @testset "kNN density estimator outperforms Voronoi on elongated patches (Round 012)" begin
+        # Mini A431-mimic: low-density background plus three thick rectangular
+        # patches (AR 4-7) at 4× density. Both estimators work here, but kNN
+        # consistently outperforms Voronoi because cells along the patch
+        # boundary inflate. Tuned so kNN ball (k=8) stays mostly interior to
+        # the patches; thinner patches need k≤6 and the dev/scripts/ diagnostic
+        # on the full A431-mimic shows the headline mitigation at AR 8-20.
+        rng = Xoshiro(20260429)
+
+        function in_rect(cx, cy, hw, hh, θ, x, y)
+            dx = x - cx; dy = y - cy
+            c = cos(-θ); s = sin(-θ)
+            xl = c * dx - s * dy
+            yl = s * dx + c * dy
+            abs(xl) <= hw && abs(yl) <= hh
+        end
+
+        # Three thick rectangles inside [0, 2] × [0, 2]: 0.8x0.2, 0.8x0.15, 1.0x0.30.
+        rects = [
+            (cx = 0.6, cy = 0.5, hw = 0.4, hh = 0.10, θ = 0.0),
+            (cx = 1.3, cy = 0.7, hw = 0.4, hh = 0.075, θ = π/4),
+            (cx = 1.0, cy = 1.4, hw = 0.5, hh = 0.15, θ = -π/6),
+        ]
+
+        n_bg = 2000  # ≈500/μm² uniform background in 2×2 μm
+        pts = Tuple{Float64,Float64,Int}[]
+        gt  = Int[]  # 1 = low, 2 = high
+        for _ in 1:n_bg
+            x = 2.0 * rand(rng); y = 2.0 * rand(rng)
+            push!(pts, (x, y, 1))
+            in_high = any(r -> in_rect(r.cx, r.cy, r.hw, r.hh, r.θ, x, y), rects)
+            push!(gt, in_high ? 2 : 1)
+        end
+        # Add 250 emitters per rect — combined with bg-falling-in gives
+        # ~4× density inside the rectangles (~2000/μm² vs 500/μm²).
+        for r in rects
+            added = 0
+            while added < 250
+                cb = abs(cos(r.θ)); sb = abs(sin(r.θ))
+                dx = r.hw * cb + r.hh * sb
+                dy = r.hw * sb + r.hh * cb
+                x = r.cx + (2 * rand(rng) - 1) * dx
+                y = r.cy + (2 * rand(rng) - 1) * dy
+                if 0 < x < 2 && 0 < y < 2 && in_rect(r.cx, r.cy, r.hw, r.hh, r.θ, x, y)
+                    push!(pts, (x, y, 1))
+                    push!(gt, 2)
+                    added += 1
+                end
+            end
+        end
+
+        smld = _make_2d_smld(pts; n_datasets = 1)
+
+        # Baseline: Voronoi density.
+        cfg_v = MRFDensityClusterConfig(per_dataset = false,
+                                        density_estimator = :voronoi)
+        out_v, _ = cluster(smld, cfg_v)
+        regime_v = out_v.metadata["mrf_regime_per_emitter"]::Vector{Int}
+        pred_v = [r == 2 ? 2 : 1 for r in regime_v]
+        acc_v = count(pred_v .== gt) / length(gt)
+
+        # Mitigation: kNN density. k=8 keeps the kNN ball inside the
+        # patch bodies (~100-150 nm thick); larger k spills into background.
+        cfg_k = MRFDensityClusterConfig(per_dataset = false,
+                                        density_estimator = :knn,
+                                        density_k = 8)
+        out_k, _ = cluster(smld, cfg_k)
+        regime_k = out_k.metadata["mrf_regime_per_emitter"]::Vector{Int}
+        pred_k = [r == 2 ? 2 : 1 for r in regime_k]
+        acc_k = count(pred_k .== gt) / length(gt)
+
+        # Headline floor: kNN must clear 90% accuracy on this synthetic.
+        @test acc_k >= 0.90
+        # kNN must outperform Voronoi by a meaningful margin (validates the
+        # mitigation isn't a wash). +5pp is a conservative lower bound;
+        # full A431-mimic shows +9pp; this mini synthetic shows ~7-8pp.
+        @test acc_k > acc_v + 0.05
     end
     end  # SMLM_TEST_FULL
 

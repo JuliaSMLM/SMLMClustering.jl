@@ -41,15 +41,16 @@ import Statistics
 
 """
     MRFDensityClusterConfig(; n_regimes=2, regime_thresholds=nothing,
+                              density_estimator=:voronoi, density_k=20,
                               smoothness_lambda=nothing,
                               graph_kind=:delaunay, graph_k=8,
                               inference=:icm, icm_iters=50,
                               min_points=5, use_3d=false,
                               per_dataset=true, remove_unclustered=false)
 
-Adaptive-density clustering via per-emitter Voronoi density → multi-component
-GMM regime assignment → multi-class Potts MRF refinement → connected
-components on the foreground.
+Adaptive-density clustering via per-emitter density → multi-component GMM
+regime assignment → multi-class Potts MRF refinement → connected components
+on the foreground.
 
 Designed for SMLM data with multiple density regimes (e.g. one low-density
 background + one or more higher-density structures) where a single global
@@ -59,18 +60,39 @@ even if their individual density is borderline (fixes "missing middles");
 isolated tight knots in a low-density sea get pulled back to background
 (fixes spurious-small-cluster artifacts).
 
+# Density estimator
+Voronoi density (1/cell area) is the simplest local estimator but its noise
+scale is large (σ_log ≈ 1) because it averages over a single Voronoi cell.
+For thin elongated structures (width comparable to nearest-neighbor distance,
+e.g. dSTORM fibers narrower than ~100 nm at high density) Voronoi cells span
+the patch boundary and inflate, dragging interior densities toward background
+and producing a false-negative band at patch interiors. The kNN density
+estimator `ρ_k = k / (π · r_k²)` (Loftsgaarden-Quesenberry 1965) integrates
+over the k nearest neighbors and reduces noise to σ_log ≈ 1/√k, recovering
+patch-interior detection at the cost of some boundary blur. Default
+`density_estimator=:voronoi` preserves backward compatibility; switch to
+`:knn` (with `density_k=20-30`) for thin-fiber-bearing datasets.
+
 # Fields
 - `n_regimes::Int = 2`: number of density regimes. Lowest is treated as
   background/noise; higher regimes form the foreground.
 - `regime_thresholds::Union{Nothing, Vector{Float64}} = nothing`: optional
   explicit log-density thresholds, length `n_regimes - 1`, sorted ascending.
   When provided, GMM is bypassed and points are binned directly.
+- `density_estimator::Symbol = :voronoi`: per-emitter density estimator.
+  `:voronoi` uses 1/Voronoi-cell-area; `:knn` uses k / (π · r_k²) where
+  `r_k` is the `density_k`-th nearest-neighbor distance.
+- `density_k::Int = 20`: k for the kNN density estimator when
+  `density_estimator=:knn`. Ignored for `:voronoi`. Larger k → lower
+  variance, more boundary blur; recommended range 10-50.
 - `smoothness_lambda::Union{Nothing, Float64} = nothing`: MRF smoothness
   weight. When `nothing`, auto-set per group to `max(1e-6, MAD(U_max - U_min))`
   where MAD is the median absolute deviation of the per-emitter unary range.
 - `graph_kind::Symbol = :delaunay`: neighbor graph for both the MRF and the
-  CC step. `:delaunay` reuses the tessellation from step 1 (free); `:knn`
-  builds a symmetrized k-NN graph (uses `graph_k`).
+  CC step. `:delaunay` reuses the tessellation from step 1 (free, requires
+  `density_estimator=:voronoi`); `:knn` builds a symmetrized k-NN graph
+  (uses `graph_k`). When `density_estimator=:knn` AND `graph_kind=:delaunay`,
+  a Delaunay triangulation is still computed to produce the neighbor graph.
 - `graph_k::Int = 8`: k for the kNN graph when `graph_kind=:knn`. Ignored
   for `:delaunay`.
 - `inference::Symbol = :icm`: MRF inference algorithm. Only `:icm`
@@ -120,6 +142,8 @@ that only exposes per-emitter densities without clustering).
 Base.@kwdef struct MRFDensityClusterConfig <: AbstractClusterConfig
     n_regimes::Int = 2
     regime_thresholds::Union{Nothing, Vector{Float64}} = nothing
+    density_estimator::Symbol = :voronoi
+    density_k::Int = 20
     smoothness_lambda::Union{Nothing, Float64} = nothing
     graph_kind::Symbol = :delaunay
     graph_k::Int = 8
@@ -277,6 +301,36 @@ function _unary_from_thresholds(x::Vector{Float64}, thresholds::Vector{Float64},
 end
 
 # ----------------------------------------------------------------------------
+# Per-emitter kNN density estimate: ρ_k = k / (π · r_k²) where r_k is the
+# Euclidean distance to the kth nearest neighbor (excluding self).
+# Returns a Vector{Float64} of densities (μm⁻²) of length n in the same order
+# as the input emitters. Returns NaN entries when n ≤ k or the kth NN
+# distance is zero (duplicate point — handled defensively; voronoi guard
+# normally rejects duplicates upstream).
+# ----------------------------------------------------------------------------
+function _knn_density(X::Matrix{Float64}, k::Int)
+    n = size(X, 2)
+    densities = Vector{Float64}(undef, n)
+    if n <= k
+        fill!(densities, NaN)
+        return densities
+    end
+    tree = NearestNeighbors.KDTree(X)
+    @inbounds for i in 1:n
+        idxs, dists = NearestNeighbors.knn(tree, view(X, :, i), k + 1, true)
+        # Distances are sorted ascending and include self (distance 0) as
+        # the first entry; the kth NN distance is at index k+1.
+        rk = dists[end]
+        if rk > 0
+            densities[i] = k / (π * rk^2)
+        else
+            densities[i] = NaN
+        end
+    end
+    return densities
+end
+
+# ----------------------------------------------------------------------------
 # Build a Vector{Vector{Int}} adjacency list for n nodes given an iterable
 # of (i, j) edges with i < j.
 # ----------------------------------------------------------------------------
@@ -426,6 +480,10 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::MRFDensityClusterConfig)
         throw(ArgumentError("MRFDensityClusterConfig.n_regimes must be ≥ 2 (got $(cfg.n_regimes))"))
     cfg.graph_kind in (:delaunay, :knn) ||
         throw(ArgumentError("MRFDensityClusterConfig.graph_kind must be :delaunay or :knn (got $(cfg.graph_kind))"))
+    cfg.density_estimator in (:voronoi, :knn) ||
+        throw(ArgumentError("MRFDensityClusterConfig.density_estimator must be :voronoi or :knn (got $(cfg.density_estimator))"))
+    cfg.density_k >= 1 ||
+        throw(ArgumentError("MRFDensityClusterConfig.density_k must be ≥ 1 (got $(cfg.density_k))"))
     cfg.inference === :icm ||
         throw(ArgumentError("MRFDensityClusterConfig.inference: only :icm currently supported (got $(cfg.inference))"))
     cfg.graph_k >= 1 ||
@@ -474,20 +532,43 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::MRFDensityClusterConfig)
         end
 
         sub = view(smld.emitters, idxs)
-        # Step 1: per-emitter Voronoi areas (and the triangulation, kept for
-        # the Delaunay edge graph). Raises ArgumentError on duplicate (x,y).
-        areas, tri = _voronoi_areas(sub)
+        # Step 1: per-emitter density. The Voronoi tessellation is computed
+        # whenever the Delaunay graph is needed for steps 3-4 (i.e. always
+        # when graph_kind=:delaunay), regardless of which density estimator
+        # is selected. Raises ArgumentError on duplicate (x,y).
+        local areas::Vector{Float64}
+        local tri
+        if cfg.graph_kind === :delaunay || cfg.density_estimator === :voronoi
+            areas, tri = _voronoi_areas(sub)
+        else
+            areas = fill(NaN, n)  # unused
+            tri = nothing
+        end
 
-        # log densities (μm⁻²) for all-finite-positive areas; NaN for invalid.
+        # Per-emitter density (μm⁻²) — Voronoi or kNN.
         log_rho = Vector{Float64}(undef, n)
         valid_mask = falses(n)
-        @inbounds for j in 1:n
-            a = areas[j]
-            if isfinite(a) && a > 0
-                log_rho[j] = log(1.0 / a)
-                valid_mask[j] = true
-            else
-                log_rho[j] = NaN
+        if cfg.density_estimator === :voronoi
+            @inbounds for j in 1:n
+                a = areas[j]
+                if isfinite(a) && a > 0
+                    log_rho[j] = log(1.0 / a)
+                    valid_mask[j] = true
+                else
+                    log_rho[j] = NaN
+                end
+            end
+        else  # :knn
+            X_local = _coords_matrix(sub, false)
+            densities = _knn_density(X_local, cfg.density_k)
+            @inbounds for j in 1:n
+                d = densities[j]
+                if isfinite(d) && d > 0
+                    log_rho[j] = log(d)
+                    valid_mask[j] = true
+                else
+                    log_rho[j] = NaN
+                end
             end
         end
         n_valid = count(valid_mask)

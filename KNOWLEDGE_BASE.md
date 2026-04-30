@@ -103,6 +103,14 @@ Per-cluster outputs land in `emitter.id` (V1 convention). MRF-specific outputs g
 
 **Scope:** Applies to `MRFDensityClusterConfig` and any future density-regime variants (e.g. graph-cuts inference replacing ICM). 2D only (V7 — DelaunayTriangulation.jl). Lowest-regime-as-noise convention is binding — backends that subclass this pipeline must not invert it without explicit user-facing rename. The auto-λ heuristic (MAD of unary range) is data-scale-free and works without dataset-specific tuning; users with strong priors override via `smoothness_lambda`.
 
+### V12 — kNN density estimator beats Voronoi at thin-elongated-patch interiors
+
+**Decision:** `MRFDensityClusterConfig` exposes `density_estimator::Symbol = :voronoi` (default, backward compatible) with `:knn` as an alternative paired with `density_k::Int = 20`. The kNN estimator computes ρᵢ = k / (π · r_kᵢ²) where r_kᵢ is the kth nearest-neighbor distance for emitter i. For SMLM datasets containing thin elongated structures (widths comparable to the local nearest-neighbor distance — e.g. AR ≥ 5 fibers narrower than ~150 nm at high density) the kNN estimator dramatically reduces the patch-interior false-negative band that Voronoi produces.
+
+**Evidence:** Round 012 on the synthetic A431-mimic (`dev/scripts/output/synthetic_smld.jld2`, 5×5 μm ROI, 12 patches AR 1.1-19.7, 13,579 emitters). Voronoi MRF: 79.85% headline accuracy, 22.49% interior FN-rate (FN concentrated >100 nm inside patches). kNN MRF (k=20): 89.11% accuracy (+9.26 pp), 6.45% interior FN-rate (-16.04 pp). Per-patch breakdown shows the win is consistent across all patches with measurable interior emitters: rect AR 8.9 went from 35% → 2.5% interior FN; ellipses dropped 60-93%. `dev/scripts/output/mrf_interior_diagnosis.png` row-3 shows the FN signed-distance distribution shifted from peaking at -0.2 μm (deep interior) to peaking at 0 μm (boundary), with the deep-interior tail collapsed. Density distributions in row 1 are visibly more separable under kNN — σ_log shrinks roughly 1/√k as expected.
+
+**Scope:** Applies to MRFDensityClusterConfig only. Operational regime bound: kNN density requires the kNN ball radius (≈ √(k / π · ρ)) to be smaller than the structure half-width, otherwise the ball spills into background and the GMM regime split can flip foreground/background. For thin patches where k=20 is too coarse, drop to k=8-10. The Voronoi default is preserved because Voronoi remains the right estimator for blob-shaped clusters where boundary spillage is a non-issue and backward compatibility matters. When `graph_kind=:delaunay`, the Voronoi tessellation is still computed (needed for the neighbor graph) regardless of the density estimator selection.
+
 ---
 
 ## Dead Ends
