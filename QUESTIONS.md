@@ -25,7 +25,35 @@
 HARD RULE: A human who has not read the round file should be able to answer the Short Question using only the What-each-answer-means block. If they need to read Technical detail to answer, the Short Question is wrong — rewrite it.
 -->
 
-(none)
+### Q6 — What should the next round of the MRF clustering backend actually deliver?
+
+**From round:** 016
+
+**Short question:** The wishlist for a future version of the spatial-density clustering algorithm has three half-formed ideas on it. Which one (or combination) do you want a future round to ship, and what would have to be true for it to count as done?
+
+**What each answer means:**
+- **Pick option (a) — "smarter labeling math":** A future round replaces the current local label-update loop with a globally-optimal version. This will change accuracy results on hard cases (interior patches that the current method misses), but it requires adding a new external math library to the project. Done when accuracy improves on a known-hard test case.
+- **Pick option (b) — "report uncertainty alongside labels":** A future round adds a "soft probability per emitter" output next to the existing hard labels. Done when callers can read back per-emitter probabilities and use them downstream.
+- **Pick combination (a) + (b):** Both. Larger scope; one round may not be enough.
+- **Drop the wishlist:** Remove the priority entirely. The current backend is good enough; future rounds work on something else.
+
+**Technical detail:** This is STATUS.md Priority 6 (`MRF v2 enhancements`) which currently lists three sub-items (a) graph-cuts MAP inference replacing ICM, (b) soft-posterior output mode (`extras[:posterior_per_emitter]::Matrix{Float64}`), (c) kNN density estimator [already DONE in Round 012, V12]. The trio is `add: TBD per (a)/(b) selection / test: TBD / doc: TBD`. Phase 2 of any future round skips this priority because the trio is incomplete. A graph-cuts implementation needs either `BoykovKolmogorov.jl`, `GraphsFlows.jl`, or an in-tree max-flow (significant scope). Soft-posterior output is much smaller — write `softmax(-U + Potts pairwise smoothing residuals)` to extras after ICM converges, ~30 lines. Either path lands in `src/backends/mrf_density.jl`. The trio shape we need filled is: `add:` (one-line summary of what code lands) / `test:` (criterion that proves it works — accuracy delta vs default? unit-level shape check? both?) / `doc:` (one-line summary of where the doc lands — README MRF subsection? api_overview entry? KB V-entry-only?).
+
+### Q7 — Should the package build a per-dataset auto-picker, or should it just write down which mode to use when?
+
+**From round:** 016
+
+**Short question:** When data has weak versus strong density contrast, this package's clustering backend has two operating modes that work better in different conditions. Should the package add a single auto-picker that decides which mode to use from the data, or should the documentation just tell users which to pick by hand?
+
+**What each answer means:**
+- **Pick option (a) — "auto-picker"**: A future round adds a wrapper config that runs a quick density check on the input, picks the right mode, and runs it. More code, more tests, but users don't have to think.
+- **Pick option (b) — "documentation only"**: A future round extends the README/docs to spell out which mode to use under which conditions. Cheap, but users have to read the docs and pick correctly themselves.
+- **Pick combination (a) + (b)**: Both. Some users will read docs, some won't; the auto-picker catches the rest.
+- **Drop the wishlist**: Remove the priority. Users figure it out from existing docs.
+
+**Technical detail:** This is STATUS.md Priority 7 (`Ratio-aware backend selector OR README guidance for low-contrast datasets`). V13 finding is the trigger: voronoi-GMM beats kNN-MRF at density ratio < 2× (the Potts smoothness amplifies a weak GMM signal into uniform misclassification, V13 mechanism). README MRF subsection already references the V13 ratio floor narratively; explicit "use voronoi-GMM if ratio < 2×" guidance is implicit in V13/V14 prose. Path (a) `RatioAwareDensityClusterConfig` would estimate the density ratio from the input (e.g. compute per-emitter Voronoi log-ρ histogram, fit 1D 2-component GMM, compute mean separation `Δμ = μ_high - μ_low`, if `Δμ < log(2)` route to voronoi-GMM else to kNN-MRF), which is ~50 lines of dispatch. Path (b) extension is ~20 lines of README + maybe a small KB V-entry restating V13's recommendation in user-facing language. The trio shape we need filled is: `add:` / `test:` / `doc:`. Note (a) and (b) are not mutually exclusive — a small wrapper plus a README sentence is plausible too.
+
+(no additional OPEN items)
 
 ---
 

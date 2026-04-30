@@ -166,6 +166,35 @@ The 1.0 μm point reproduces Round 012's 89.11% headline (same RNG seed, same ba
 
 **Scope:** Applies to `MRFDensityClusterConfig` with `density_estimator=:knn, density_k=20, n_regimes=2` on patch-and-background data resembling the A431-mimic geometry at 2× density ratio (RHO_LOW=500/μm², 5×5 μm ROI, rect aspect ratios 1-20, ellipse semi-major 0.5-1.0 μm × patch_scale). Sweep was truncated at 3.0 μm because the 5×5 μm ROI does not accommodate larger patches with the simulator's non-overlap buffer; the upper end of the operating range (≥3 μm) is asserted only as "still 88%-class" and not bounded above. The interaction with density ratio (V13) and `density_k` (open as P8) was not characterized here. The (k, patch-size) operating surface is the natural P8 follow-up.
 
+### V17 — kNN-MRF k-sensitivity at 2× contrast + ~1.5 μm patches: concave-up across k ∈ [5, 80], peak at k=15-20, V12-default k=20 reaffirmed within rounding
+
+**Decision:** On the 5×5 μm A431-mimic at fixed 2× density ratio (RHO_LOW=500/μm², RHO_HIGH_BONUS=500) and `patch_scale=0.75` (nominal mean rect length ≈ 1.5 μm — middle of the V16 plateau), the `MRFDensityClusterConfig` kNN-density pipeline is robust to the kNN neighbor count `density_k` across nearly two orders of magnitude:
+
+| k  | r_k (nm) | accuracy | precision | recall |
+|----|----------|----------|-----------|--------|
+| 5  | 40       | 85.15%   | 78.83%    | 86.57% |
+| 10 | 56       | 89.31%   | 82.24%    | 93.90% |
+| 15 | 69       | **91.23%** | 87.60%  | 91.28% |
+| 20 | 80       | 91.01%   | 93.97%    | 83.14% |
+| 30 | 98       | 90.50%   | 96.49%    | 79.43% |
+| 50 | 126      | 88.26%   | 97.92%    | 72.55% |
+| 80 | 160      | 87.32%   | 97.71%    | 70.35% |
+
+The accuracy curve is concave-up with a peak at k=15-20 (91.2 / 91.0%, indistinguishable to operational decision-making). All 7 k-values clear the 75% gate; six (k=10..80) clear the 85% gate. The V12-default k=20 is reaffirmed: the marginal k=15 advantage (+0.22 pp accuracy) is within rounding noise and below any operational decision threshold; k=20 stays the default.
+
+**Mechanism (precision/recall asymmetry).** Low k → low precision + high recall: the small kNN ball's density estimate has high variance (σ_log ≈ 1/√k), so background emitters in dense local fluctuations are misclassified as "high" and the Potts smoothness prior amplifies the noise into FP regions around true patches (k=5 FP=1295, prec=78.83%). High k → high precision + low recall: the large ball averages true patch-interior density with surrounding background, so emitters near the patch periphery (and the patch interior closest to the boundary) get under-estimated and labeled as "low" (k=80 FN=1652, rec=70.35%). The k=15-20 peak is where r_k ≈ √(k/πρ_high) ∈ [69, 80] nm matches the rect-thin half-width range (75-150 nm at `patch_scale=0.75`) — the ball fits comfortably inside the structure and aggregates enough samples to suppress the noise floor.
+
+**Operational guidance.** For 2× ratio data with patch sizes in the 1.0-3.0 μm V16 plateau:
+
+- **k=20 stays the default.** Reaffirmed as a sensible middle-of-curve pick.
+- **k ∈ [10, 30] is safe.** All clear the 85% gate at this geometry.
+- **Aggressive low k (≤ 5) saturates near the 85% gate floor.** Useful only if you have prior reason to suspect very thin structures (<75 nm half-width); pairs with the V16 patch-size finding that recommends dropping `density_k` for sub-0.5 μm patches.
+- **Aggressive high k (≥ 50) trades precision for recall and falls below the 90% line.** Avoid unless background false-positives are catastrophic and missed-patches are tolerable.
+
+**Evidence:** Round 016 sweep at `dev/scripts/k_sensitivity_sweep.jl`. Same `simulate_dataset(patch_scale=0.75, rho_low=500, rho_high_bonus=500, seed=20260429)` generates the synthetic ONCE so RNG-dependent geometry is stable across the k sweep; only `MRFDensityClusterConfig.density_k` varies. Per-k metrics in `dev/scripts/output/k_sensitivity_sweep.csv`, accuracy curve in `dev/scripts/output/k_sensitivity_sweep.png` (log-x, dashed 75% / dotted 85% gates, per-point r_k_nm annotations), 7-panel SMLMRender categorical TP/TN/FP/FN circle plot in `dev/scripts/output/round_016_smlmrender_categorical.png`. Visual diagnostic confirms the FP/FN trade-off panel-by-panel: low-k panels show green-FP speckle in background, high-k panels show red-FN at patch interior fringes; k=15-20 panels are visually cleanest.
+
+**Scope:** Applies to `MRFDensityClusterConfig` with `density_estimator=:knn, n_regimes=2` on patch-and-background data resembling the A431-mimic geometry at 2× density ratio + ~1.5 μm patches. The (k, density-ratio) and (k, patch-size) joint operating surfaces are NOT characterized here — V13 fixed k=20 across ratios; V16 fixed k=20 across patch-sizes. Whether dropping k can rescue the V13 low-contrast regime (ratio < 1.65×) or extend the V16 small-patch regime (< 0.5 μm at k=20) is open. The V12 regime bound (`r_k < structure half-width`) implies a coupling: dropping k narrows r_k and might rescue smaller patches, but it also raises σ_log and the FP-saturation failure mode kicks in faster — a 2D sweep would map this trade-off but is not yet run. The shallow peak around k=15-20 means deploys can pick within that range without revisiting; outside that range the curve falls off in predictable directions.
+
 ### V12 — kNN density estimator beats Voronoi at thin-elongated-patch interiors
 
 **Decision:** `MRFDensityClusterConfig` exposes `density_estimator::Symbol = :voronoi` (default, backward compatible) with `:knn` as an alternative paired with `density_k::Int = 20`. The kNN estimator computes ρᵢ = k / (π · r_kᵢ²) where r_kᵢ is the kth nearest-neighbor distance for emitter i. For SMLM datasets containing thin elongated structures (widths comparable to the local nearest-neighbor distance — e.g. AR ≥ 5 fibers narrower than ~150 nm at high density) the kNN estimator dramatically reduces the patch-interior false-negative band that Voronoi produces.
