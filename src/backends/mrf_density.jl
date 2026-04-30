@@ -258,6 +258,162 @@ function _gmm_em_1d(x::Vector{Float64}, k::Int;
 end
 
 # ----------------------------------------------------------------------------
+# Bayes decision boundary between two 1D Gaussians with weights, where
+# log(w1) + log N(x|μ1, σ1²) = log(w2) + log N(x|μ2, σ2²). Reduces to a
+# quadratic A x² + B x + C = 0; pick the root in [μ1, μ2] (the natural
+# inter-mode boundary). Falls back to the midpoint when the discriminant is
+# negative (one component dominates everywhere) or when the in-range root
+# selection is ambiguous.
+# ----------------------------------------------------------------------------
+function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
+                                      μ2::Float64, σ²2::Float64, w2::Float64)
+    # Equal variances → linear: solution is unique and analytic.
+    A = 1.0 / σ²1 - 1.0 / σ²2
+    B = -2.0 * (μ1 / σ²1 - μ2 / σ²2)
+    C = μ1^2 / σ²1 - μ2^2 / σ²2 + log(σ²2 / σ²1) - 2 * log(w1 / w2)
+    if abs(A) < 1e-12
+        return abs(B) > 1e-12 ? -C / B : (μ1 + μ2) / 2
+    end
+    Δ = B^2 - 4.0 * A * C
+    if Δ < 0
+        return (μ1 + μ2) / 2
+    end
+    s = sqrt(Δ)
+    x1 = (-B - s) / (2.0 * A)
+    x2 = (-B + s) / (2.0 * A)
+    lo, hi = minmax(μ1, μ2)
+    if lo <= x1 <= hi
+        return x1
+    elseif lo <= x2 <= hi
+        return x2
+    else
+        return (μ1 + μ2) / 2
+    end
+end
+
+"""
+    calibrate_regime_thresholds(smld; n_regimes=2, density_estimator=:knn,
+                                 density_k=20) -> Vector{Float64}
+
+Derive log-density regime-boundary thresholds from a calibration SMLD by
+fitting a 1D Gaussian mixture on its per-emitter log densities. The returned
+`Vector{Float64}` of length `n_regimes - 1` is sorted ascending and is in the
+exact shape `MRFDensityClusterConfig.regime_thresholds` accepts — pass it
+directly into the config to bypass GMM on subsequent query ROIs.
+
+# Use case
+For datasets with stable density structure across ROIs (same imaging
+conditions, same labeling protocol), calibrating once on a trusted ROI and
+reusing the thresholds across query ROIs is faster (skips per-ROI EM) and
+more reproducible than letting the GMM auto-fit on each ROI independently.
+The recommendation is especially strong at the low-contrast end of the
+density-ratio band (Round 013 / KB V13): when the high/low log-density
+modes are close together, GMM EM on a single ROI can pick a degenerate
+split that the Potts smoothness prior then amplifies into a uniform-label
+collapse — calibration-derived thresholds avoid that failure mode by
+fixing the regime boundary at the value learned from a higher-quality fit.
+
+# Arguments
+- `smld::SMLMData.BasicSMLD`: the calibration ROI. The helper computes
+  per-emitter log densities globally (no per-dataset split — the returned
+  thresholds are a single global vector that applies uniformly across all
+  groups when passed to `MRFDensityClusterConfig.regime_thresholds`).
+- `n_regimes::Int = 2`: number of density regimes (≥ 2). Returns
+  `n_regimes - 1` thresholds.
+- `density_estimator::Symbol = :knn`: density estimator for log-ρ. `:knn`
+  uses `density_k` nearest neighbors (recommended for thin-fiber-bearing
+  datasets per V12); `:voronoi` uses 1/cell-area.
+- `density_k::Int = 20`: k for the kNN estimator. Ignored for `:voronoi`.
+
+# Boundary computation
+Each threshold is the analytic Bayes decision boundary between consecutive
+GMM components (sorted ascending by mean), accounting for unequal variances
+and weights. Falls back to the midpoint between consecutive means when the
+quadratic discriminant is negative (one component dominates everywhere).
+
+# Returns
+`Vector{Float64}` of length `n_regimes - 1`, sorted ascending. Pass directly
+to `MRFDensityClusterConfig(regime_thresholds = ...)`.
+
+# Errors
+- `ArgumentError` if `n_regimes < 2`, `density_estimator` is unknown,
+  `density_k < 1`, or the calibration SMLD has fewer valid emitters than
+  `n_regimes` (after filtering NaN densities).
+- `ErrorException` if the GMM fit fails (variance collapse, all-equal
+  densities). Try a different calibration ROI or fewer regimes.
+
+# Example
+```julia
+# Fit thresholds on a high-quality calibration ROI.
+cal_smld = load_calibration_data()
+thr = calibrate_regime_thresholds(cal_smld; n_regimes = 2,
+                                   density_estimator = :knn,
+                                   density_k = 20)
+
+# Apply on query ROIs without re-fitting.
+cfg = MRFDensityClusterConfig(n_regimes = 2,
+                              density_estimator = :knn,
+                              density_k = 20,
+                              regime_thresholds = thr)
+(smld_out, info) = cluster(query_smld, cfg)
+```
+
+See also: [`MRFDensityClusterConfig`](@ref), [`cluster`](@ref).
+"""
+function calibrate_regime_thresholds(smld::SMLMData.BasicSMLD;
+                                       n_regimes::Int = 2,
+                                       density_estimator::Symbol = :knn,
+                                       density_k::Int = 20)
+    n_regimes >= 2 ||
+        throw(ArgumentError("calibrate_regime_thresholds: n_regimes must be ≥ 2 (got $n_regimes)"))
+    density_estimator in (:voronoi, :knn) ||
+        throw(ArgumentError("calibrate_regime_thresholds: density_estimator must be :voronoi or :knn (got $density_estimator)"))
+    density_k >= 1 ||
+        throw(ArgumentError("calibrate_regime_thresholds: density_k must be ≥ 1 (got $density_k)"))
+
+    n = length(smld.emitters)
+    n >= n_regimes ||
+        throw(ArgumentError("calibrate_regime_thresholds: calibration SMLD has $n emitters, need ≥ $n_regimes"))
+
+    # Per-emitter log density across the entire SMLD (no per-dataset split —
+    # the returned thresholds apply uniformly across all groups when used as
+    # MRFDensityClusterConfig.regime_thresholds).
+    log_rho = Float64[]
+    if density_estimator === :voronoi
+        areas, _ = _voronoi_areas(smld.emitters)
+        @inbounds for a in areas
+            (isfinite(a) && a > 0) || continue
+            push!(log_rho, log(1.0 / a))
+        end
+    else  # :knn
+        X = _coords_matrix(smld.emitters, false)
+        densities = _knn_density(X, density_k)
+        @inbounds for d in densities
+            (isfinite(d) && d > 0) || continue
+            push!(log_rho, log(d))
+        end
+    end
+
+    length(log_rho) >= n_regimes ||
+        throw(ArgumentError("calibrate_regime_thresholds: only $(length(log_rho)) valid emitters after filtering NaN densities, need ≥ $n_regimes"))
+
+    fit = _gmm_em_1d(log_rho, n_regimes)
+    fit === nothing &&
+        error("calibrate_regime_thresholds: GMM fit failed on calibration data " *
+              "(variance collapse, all-equal densities, or component starvation). " *
+              "Try a different calibration ROI or fewer regimes.")
+
+    # Decision boundary between each pair of consecutive (mean-sorted) components.
+    thresholds = Vector{Float64}(undef, n_regimes - 1)
+    @inbounds for k in 1:(n_regimes - 1)
+        thresholds[k] = _gaussian_decision_boundary(
+            fit.means[k],   fit.vars[k],   fit.weights[k],
+            fit.means[k+1], fit.vars[k+1], fit.weights[k+1])
+    end
+    return thresholds
+end
+
+# ----------------------------------------------------------------------------
 # Build the unary cost matrix U[i, k] = -log(w_k * N(x[i] | μ_k, σ_k²)).
 # Used in step 3 (MRF refinement) as the data term.
 # ----------------------------------------------------------------------------

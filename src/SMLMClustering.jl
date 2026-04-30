@@ -27,7 +27,7 @@ using Random
 
 export AbstractClusterConfig, ClusterInfo, cluster,
        DBSCANConfig, HDBSCANConfig, HierarchicalConfig, VoronoiConfig,
-       MRFDensityClusterConfig,
+       MRFDensityClusterConfig, calibrate_regime_thresholds,
        AbstractStatisticsConfig, ClusterStatisticsInfo, cluster_statistics,
        HopkinsConfig, VoronoiDensityConfig
 

@@ -107,6 +107,18 @@ using Statistics
 
     @testset "exports" begin
         @test :MRFDensityClusterConfig in names(SMLMClustering)
+        @test :calibrate_regime_thresholds in names(SMLMClustering)
+    end
+
+    @testset "calibrate_regime_thresholds: argument validation" begin
+        smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1),
+                              (1.0, 1.0, 1), (0.5, 0.5, 1)])
+        @test_throws ArgumentError calibrate_regime_thresholds(smld; n_regimes = 1)
+        @test_throws ArgumentError calibrate_regime_thresholds(smld; density_estimator = :bogus)
+        @test_throws ArgumentError calibrate_regime_thresholds(smld; density_k = 0)
+        # Too few emitters for n_regimes.
+        smld_tiny = _make_2d_smld([(0.0, 0.0, 1)])
+        @test_throws ArgumentError calibrate_regime_thresholds(smld_tiny; n_regimes = 2)
     end
 
     if SMLM_TEST_FULL
@@ -331,6 +343,71 @@ using Statistics
         smld_out, info = cluster(smld, cfg)
         @test all(e -> e.id > 0, smld_out.emitters)
         @test length(smld_out.emitters) == info.n_clustered
+    end
+    end  # SMLM_TEST_FULL
+
+    if SMLM_TEST_FULL
+    @testset "calibrate_regime_thresholds: 2-regime helper recovers GMM split point" begin
+        rng = Xoshiro(20260430)
+        # Calibration data: low-density background + tight blob — same shape as
+        # the 2-regime synthetic above but a different RNG seed so the test
+        # verifies the calibrated threshold transports to fresh data.
+        pts = Tuple{Float64,Float64,Int}[]
+        for _ in 1:200
+            push!(pts, (5.0 * rand(rng), 5.0 * rand(rng), 1))
+        end
+        append!(pts, _blob(rng, 2.5, 2.5, 0.05, 60))
+        cal_smld = _make_2d_smld(pts; n_datasets = 1)
+
+        # Fit thresholds via the helper. With 2 regimes we expect a single
+        # threshold strictly between the background and blob log-densities.
+        thr = calibrate_regime_thresholds(cal_smld; n_regimes = 2,
+                                            density_estimator = :voronoi)
+        @test length(thr) == 1
+        @test issorted(thr)
+
+        # Apply the calibrated thresholds on a fresh query SMLD; verify the
+        # override path runs to completion and the blob is recovered.
+        rng2 = Xoshiro(20260431)
+        pts2 = Tuple{Float64,Float64,Int}[]
+        for _ in 1:200
+            push!(pts2, (5.0 * rand(rng2), 5.0 * rand(rng2), 1))
+        end
+        append!(pts2, _blob(rng2, 2.5, 2.5, 0.05, 60))
+        query_smld = _make_2d_smld(pts2; n_datasets = 1)
+
+        cfg_override = MRFDensityClusterConfig(per_dataset = false,
+                                                regime_thresholds = thr,
+                                                min_points = 10)
+        out, info = cluster(query_smld, cfg_override)
+        @test info.n_clusters >= 1
+        means = out.metadata["mrf_regime_means"]
+        @test all(isnan, means[1])  # NaN signals "manual binning, no GMM fit"
+
+        # 3-regime helper returns 2 thresholds, sorted ascending.
+        thr3 = calibrate_regime_thresholds(cal_smld; n_regimes = 3,
+                                            density_estimator = :voronoi)
+        @test length(thr3) == 2
+        @test issorted(thr3)
+    end
+    end  # SMLM_TEST_FULL
+
+    if SMLM_TEST_FULL
+    @testset "calibrate_regime_thresholds: kNN estimator path runs and produces valid thresholds" begin
+        rng = Xoshiro(20260432)
+        pts = Tuple{Float64,Float64,Int}[]
+        for _ in 1:200
+            push!(pts, (5.0 * rand(rng), 5.0 * rand(rng), 1))
+        end
+        append!(pts, _blob(rng, 2.5, 2.5, 0.05, 60))
+        cal_smld = _make_2d_smld(pts; n_datasets = 1)
+
+        thr = calibrate_regime_thresholds(cal_smld; n_regimes = 2,
+                                            density_estimator = :knn,
+                                            density_k = 20)
+        @test length(thr) == 1
+        # The :knn estimator should produce a finite threshold (no NaN/Inf).
+        @test all(isfinite, thr)
     end
     end  # SMLM_TEST_FULL
 

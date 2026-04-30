@@ -1,0 +1,5 @@
+case,mode,calibrated_threshold_logrho,accuracy,precision,recall,tp,tn,fp,fn,n_total,delta_pp_vs_auto
+query_2x,gmm_auto,6.685011,0.9372,0.9395,0.9017,4879,7742,314,532,13467,0.00
+query_2x,override,6.685011,0.8825,0.9388,0.7568,4095,7789,267,1316,13467,-5.47
+query_15x,gmm_auto,6.685011,0.7210,0.5986,0.5264,2161,6607,1449,1944,12161,0.00
+query_15x,override,6.685011,0.7590,0.8763,0.3330,1367,7863,193,2738,12161,+3.80
