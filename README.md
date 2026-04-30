@@ -144,6 +144,38 @@ Output metadata: `mrf_regime_per_emitter` (per-emitter regime ID, original
 emitter order), `mrf_lambda_used` (per-group smoothness weight),
 `mrf_regime_means` (per-group GMM component means in log-density space).
 
+#### When it works
+
+Characterized on a controlled 5×5 μm A431-mimic synthetic (kNN density
+estimator, k=20, 2 regimes, ~13–22 k emitters across 12 patches, AR 1–20).
+Headline accuracy by density ratio (high / low):
+
+| ratio | kNN-MRF | voronoi-GMM (no MRF) |
+|-------|---------|----------------------|
+| 1.2×  | 35%     | 65%                  |
+| 1.5×  | 69%     | 67%                  |
+| 2.0×  | 89%     | 72%                  |
+| 3.0×  | 95%     | 69%                  |
+| 5.0×  | 96%     | 87%                  |
+
+**Use kNN-MRF when the density ratio is ≥ 2×.** Operational floor: ratio
+≥ 1.65× clears 75% accuracy; ratio ≥ 1.85× clears 85%.
+
+**Use voronoi-GMM (`VoronoiDensityConfig` + your own GMM split, or
+external thresholding on the per-emitter density extra) when the density
+ratio is below 2×.** At very low contrast the Potts smoothness term
+amplifies a degenerate GMM regime split into uniform misclassification —
+voronoi-GMM is per-emitter-independent and degrades more gracefully.
+
+**Use the kNN density estimator (`density_estimator = :knn, density_k = 20`)
+for elongated patches with widths comparable to the local nearest-neighbor
+distance** (thin fibers, narrow channels). Round 012 result on the
+2× synthetic: kNN closes a 22.5% → 6.5% patch-interior FN-rate gap that
+Voronoi-density leaves open. Bound: kNN ball radius (≈ √(k / π · ρ))
+must fit inside the structure half-width. For very thin patches drop to
+k = 8–10. Voronoi remains the default for blob-shaped clusters where
+boundary spillage is a non-issue.
+
 ## Spatial-statistic backend (`cluster_statistics`)
 
 ### Hopkins
