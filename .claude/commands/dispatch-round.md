@@ -148,6 +148,41 @@ Skip raw round-file contents, raw STATUS.md sections, and project-health metrics
 
 ---
 
+## 4b. Slack notification (project-local — not in canonical skeleton)
+
+After posting the digest to chat, also post to Slack so the developer sees round closures away from the terminal. Two messages per round:
+
+1. **One-liner notification**: `[SMLMClustering Round NNN] <status> · <key finding ≤80 chars> · <short SHA>`
+2. **Full digest paragraph**: the same 2-3 sentence synthesis just posted to chat in Step 4.
+
+Target: channel `$SLACK_CHANNEL_ID_LL_CC` ("LL CC" — Lidkelab Claude Code) using bot token `$SLACK_BOT_TOKEN_LL`. Both env vars are pre-set in the orchestrator's shell via the kalclaw setup; if either is missing, log to chat and skip Slack (do not abort).
+
+Use a single `Bash` call. Construct the JSON via `jq -n --arg` to avoid shell-quoting hazards (digests contain quotes, backticks, asterisks, etc.):
+
+```bash
+ONELINER="[SMLMClustering Round NNN] <status> · <key finding ≤80 chars> · <short SHA>"
+DIGEST="<the 2-3 sentence digest paragraph from Step 4>"
+
+if [[ -z "$SLACK_BOT_TOKEN_LL" || -z "$SLACK_CHANNEL_ID_LL_CC" ]]; then
+  echo "slack: skipped (env vars missing)"
+else
+  for TEXT in "$ONELINER" "$DIGEST"; do
+    curl -sS -X POST \
+      -H "Authorization: Bearer $SLACK_BOT_TOKEN_LL" \
+      -H "Content-type: application/json; charset=utf-8" \
+      -d "$(jq -n --arg ch "$SLACK_CHANNEL_ID_LL_CC" --arg text "$TEXT" '{channel: $ch, text: $text}')" \
+      https://slack.com/api/chat.postMessage \
+      | jq -r '"slack: " + (if .ok then "ok ts=\(.ts)" else "FAIL \(.error)" end)'
+  done
+fi
+```
+
+Failure handling: if the post fails (token expired, rate-limit, channel not found), surface a one-line note to the developer in chat (`Slack notification failed: <error>`) but do **not** abort the round close. Slack is decorative; the protocol-critical commit already landed in Step 3's round fork.
+
+**Rescaffold caveat.** This section is project-local. `/round-init --rescaffold` overwrites `.claude/commands/dispatch-round.md` from the canonical LLDevTools skeleton, which does NOT include this Slack step. To preserve across rescaffolds: re-apply manually after each rescaffold, or upstream a `<!-- PROJECT-SPECIFIC: post-round-hooks --><!-- /PROJECT-SPECIFIC -->` fence to LLDevTools' `skeleton/dispatch-round.md` and put this content inside it.
+
+---
+
 ## 5. Refresh the dashboard view files
 
 If `.claude/dashboard/` exists, the project has the round-dashboard layer active. Spawn a small fork to regenerate the view files:
