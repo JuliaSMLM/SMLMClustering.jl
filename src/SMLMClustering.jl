@@ -29,8 +29,9 @@ export AbstractClusterConfig, ClusterInfo, cluster,
        DBSCANConfig, HDBSCANConfig, HierarchicalConfig, VoronoiConfig,
        MRFDensityClusterConfig, calibrate_regime_gaussians,
        calibrate_regime_thresholds,
+       point_hysteresis_clusters,
        AbstractStatisticsConfig, ClusterStatisticsInfo, cluster_statistics,
-       HopkinsConfig, VoronoiDensityConfig
+       HopkinsConfig, VoronoiDensityConfig, LocalContrastFeature
 
 include("types.jl")
 include("utils.jl")
@@ -40,6 +41,8 @@ include("backends/hierarchical.jl")
 include("backends/voronoi.jl")
 include("backends/hopkins.jl")
 include("backends/voronoi_density.jl")
+include("backends/local_contrast.jl")
 include("backends/mrf_density.jl")
+include("backends/point_hysteresis.jl")
 
 end
