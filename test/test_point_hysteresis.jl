@@ -6,7 +6,23 @@ using Statistics
 
 # Reuses `_make_2d_smld` and `_blob` from test_dbscan.jl.
 
-@testset "point_hysteresis_clusters" begin
+@testset "PointHysteresisConfig backend" begin
+
+    @testset "config construction" begin
+        cfg = PointHysteresisConfig()
+        @test cfg isa AbstractClusterConfig
+        @test cfg.graph_k == 12
+        @test cfg.min_points == 100
+        @test cfg.use_3d === false
+        @test cfg.per_dataset === false
+        @test cfg.remove_unclustered === false
+
+        cfg2 = PointHysteresisConfig(graph_k = 20, min_points = 50,
+                                     per_dataset = true)
+        @test cfg2.graph_k == 20
+        @test cfg2.min_points == 50
+        @test cfg2.per_dataset === true
+    end
 
     @testset "argument validation" begin
         rng = Xoshiro(20260502)
@@ -18,24 +34,28 @@ using Statistics
         support[1] = true
         seed[2] = true
         # support[2] left false → seed without support: should error
-        @test_throws ArgumentError point_hysteresis_clusters(smld, seed, support)
+        @test_throws ArgumentError cluster(smld, PointHysteresisConfig();
+                                            seed = seed, support = support)
 
-        @test_throws ArgumentError point_hysteresis_clusters(
-            smld, falses(49), falses(50))      # seed length mismatch
-        @test_throws ArgumentError point_hysteresis_clusters(
-            smld, falses(50), falses(49))      # support length mismatch
-        @test_throws ArgumentError point_hysteresis_clusters(
-            smld, falses(50), falses(50); graph_k = 0)
-        @test_throws ArgumentError point_hysteresis_clusters(
-            smld, falses(50), falses(50); min_points = 0)
+        @test_throws ArgumentError cluster(smld, PointHysteresisConfig();
+                                            seed = falses(49), support = falses(50))
+        @test_throws ArgumentError cluster(smld, PointHysteresisConfig();
+                                            seed = falses(50), support = falses(49))
+        @test_throws ArgumentError cluster(smld,
+            PointHysteresisConfig(graph_k = 0);
+            seed = falses(50), support = falses(50))
+        @test_throws ArgumentError cluster(smld,
+            PointHysteresisConfig(min_points = 0);
+            seed = falses(50), support = falses(50))
     end
 
     @testset "trivial: empty smld + empty masks" begin
         cam = IdealCamera(1:8, 1:8, 0.1)
         smld = BasicSMLD(SMLMData.Emitter2DFit{Float64}[], cam, 1, 1,
                          Dict{String, Any}())
-        smld_out, info = point_hysteresis_clusters(
-            smld, Bool[], Bool[]; graph_k = 5, min_points = 5)
+        smld_out, info = cluster(smld, PointHysteresisConfig(graph_k = 5,
+                                                              min_points = 5);
+                                  seed = Bool[], support = Bool[])
         @test info.n_locs_in == 0
         @test info.n_clusters == 0
         @test info.algorithm === :point_hysteresis
@@ -47,9 +67,10 @@ using Statistics
         pts = [(0.5 * randn(rng), 0.5 * randn(rng), 1) for _ in 1:200]
         smld = _make_2d_smld(pts; n_datasets = 1)
         seed = falses(200)
-        support = trues(200)        # all support, no seeds
-        smld_out, info = point_hysteresis_clusters(
-            smld, seed, support; graph_k = 8, min_points = 50)
+        support = trues(200)
+        smld_out, info = cluster(smld,
+            PointHysteresisConfig(graph_k = 8, min_points = 50);
+            seed = seed, support = support)
         @test info.n_clusters == 0
         @test info.n_clustered == 0
         @test info.n_noise == 200
@@ -82,8 +103,9 @@ using Statistics
         for i in small_start:small_end
             seed[i] = true; support[i] = true
         end
-        smld_out, info = point_hysteresis_clusters(
-            smld, seed, support; graph_k = 29, min_points = 10)
+        smld_out, info = cluster(smld,
+            PointHysteresisConfig(graph_k = 29, min_points = 10);
+            seed = seed, support = support)
         @test info.n_clusters == 1
         @test info.cluster_sizes == [30]
         @test info.n_clustered == 30
@@ -92,7 +114,6 @@ using Statistics
 
     @testset "support without seed → component dropped" begin
         rng = Xoshiro(20260502)
-        # Two well-separated 30-point clusters; only ONE has a seed.
         pts = Tuple{Float64, Float64, Int}[]
         a_start = length(pts) + 1
         append!(pts, _blob(rng, 1.0, 1.0, 0.005, 30))
@@ -105,30 +126,23 @@ using Statistics
         n = length(pts)
         seed = falses(n)
         support = falses(n)
-        # support both clusters
         for i in a_start:b_end
             support[i] = true
         end
-        # seed only the first
         seed[a_start] = true
 
-        smld_out, info = point_hysteresis_clusters(
-            smld, seed, support; graph_k = 29, min_points = 10)
+        smld_out, info = cluster(smld,
+            PointHysteresisConfig(graph_k = 29, min_points = 10);
+            seed = seed, support = support)
         @test info.n_clusters == 1
         @test info.cluster_sizes == [30]
-        # Cluster 1 should be the seeded one — verify by checking ids.
         @test all(smld_out.emitters[i].id == 1 for i in a_start:a_end)
         @test all(smld_out.emitters[i].id == 0 for i in b_start:b_end)
     end
 
     @testset "input ids do not leak to output (noise = 0 contract)" begin
-        # Pipelines that feed prior-labeled SMLDs (e.g. BaGoL group ids)
-        # must see id=0 on every unclustered emitter in the OUTPUT, even
-        # though the input had non-zero ids. Verifies we zero ids on the
-        # deepcopy before BFS.
         rng = Xoshiro(20260502)
         pts = Tuple{Float64, Float64, Int}[]
-        # 30 points in a tight cluster, plus 20 far-away noise points.
         cluster_start = length(pts) + 1
         append!(pts, _blob(rng, 1.0, 1.0, 0.005, 30))
         cluster_end = length(pts)
@@ -136,7 +150,6 @@ using Statistics
             push!(pts, (10.0 + rand(rng), 10.0 + rand(rng), 1))
         end
         smld = _make_2d_smld(pts; n_datasets = 1)
-        # Pre-stamp every emitter with a non-zero id, simulating a prior stage.
         for (i, e) in pairs(smld.emitters)
             e.id = 999
         end
@@ -147,18 +160,20 @@ using Statistics
             seed[i] = true; support[i] = true
         end
 
-        smld_out, info = point_hysteresis_clusters(
-            smld, seed, support; graph_k = 29, min_points = 10)
+        smld_out, info = cluster(smld,
+            PointHysteresisConfig(graph_k = 29, min_points = 10);
+            seed = seed, support = support)
 
         cluster_ids = [smld_out.emitters[i].id for i in cluster_start:cluster_end]
         noise_ids = [smld_out.emitters[i].id for i in (cluster_end + 1):n]
-        @test all(==(1), cluster_ids)              # cluster members get id=1
-        @test all(==(0), noise_ids)                # noise points get id=0, NOT 999
+        @test all(==(1), cluster_ids)
+        @test all(==(0), noise_ids)
         @test info.n_clustered == 30
         @test info.n_noise == 20
-        # Run with no seeds → entire output must be id=0 even though input was 999.
-        smld_empty, info_empty = point_hysteresis_clusters(
-            smld, falses(n), falses(n); graph_k = 12, min_points = 10)
+
+        smld_empty, info_empty = cluster(smld,
+            PointHysteresisConfig(graph_k = 12, min_points = 10);
+            seed = falses(n), support = falses(n))
         @test all(e -> e.id == 0, smld_empty.emitters)
         @test info_empty.n_clustered == 0
     end
@@ -171,17 +186,17 @@ using Statistics
         ids_before = [e.id for e in smld_in.emitters]
         seed = trues(length(pts))
         support = trues(length(pts))
-        smld_out, _ = point_hysteresis_clusters(
-            smld_in, seed, support; graph_k = 5, min_points = 10)
+        smld_out, _ = cluster(smld_in,
+            PointHysteresisConfig(graph_k = 5, min_points = 10);
+            seed = seed, support = support)
         @test smld_out !== smld_in
-        @test [e.id for e in smld_in.emitters] == ids_before  # input untouched
+        @test [e.id for e in smld_in.emitters] == ids_before
     end
 
     @testset "remove_unclustered drops noise from output" begin
         rng = Xoshiro(20260502)
         pts = Tuple{Float64, Float64, Int}[]
         append!(pts, _blob(rng, 1.0, 1.0, 0.005, 30))
-        # 20 noise points far away
         for _ in 1:20
             push!(pts, (10.0 + rand(rng), 10.0 + rand(rng), 1))
         end
@@ -193,12 +208,14 @@ using Statistics
             seed[i] = true; support[i] = true
         end
 
-        smld_full, info_full = point_hysteresis_clusters(
-            smld, seed, support; graph_k = 29, min_points = 10,
-            remove_unclustered = false)
-        smld_trim, info_trim = point_hysteresis_clusters(
-            smld, seed, support; graph_k = 29, min_points = 10,
-            remove_unclustered = true)
+        smld_full, info_full = cluster(smld,
+            PointHysteresisConfig(graph_k = 29, min_points = 10,
+                                  remove_unclustered = false);
+            seed = seed, support = support)
+        smld_trim, info_trim = cluster(smld,
+            PointHysteresisConfig(graph_k = 29, min_points = 10,
+                                  remove_unclustered = true);
+            seed = seed, support = support)
         @test length(smld_full.emitters) == n
         @test length(smld_trim.emitters) == 30
         @test info_full.n_clusters == 1 == info_trim.n_clusters
@@ -214,55 +231,66 @@ using Statistics
         seed = trues(n)
         support = trues(n)
 
-        # per_dataset=true: each dataset gets its own id=1
-        smld_per, info_per = point_hysteresis_clusters(
-            smld, seed, support; graph_k = 29, min_points = 10,
-            per_dataset = true)
+        smld_per, info_per = cluster(smld,
+            PointHysteresisConfig(graph_k = 29, min_points = 10,
+                                  per_dataset = true);
+            seed = seed, support = support)
         @test info_per.n_clusters == 2
         ds1_ids = unique([e.id for e in smld_per.emitters if e.dataset == 1])
         ds2_ids = unique([e.id for e in smld_per.emitters if e.dataset == 2])
-        @test ds1_ids == [1] && ds2_ids == [1]   # local namespacing per V3
+        @test ds1_ids == [1] && ds2_ids == [1]
 
-        # per_dataset=false: pooled — depending on coords may merge or split,
-        # but ids are global. Both datasets co-located → likely single cluster.
-        smld_pool, info_pool = point_hysteresis_clusters(
-            smld, seed, support; graph_k = 29, min_points = 10,
-            per_dataset = false)
+        smld_pool, info_pool = cluster(smld,
+            PointHysteresisConfig(graph_k = 29, min_points = 10,
+                                  per_dataset = false);
+            seed = seed, support = support)
         @test info_pool.n_clusters >= 1
+    end
+
+    @testset "config is reusable across multiple SMLDs" begin
+        # Verify the "config = stable reusable knobs" invariant: same cfg
+        # instance, two different SMLDs with their own seed/support, both
+        # produce a result.
+        rng = Xoshiro(20260502)
+        cfg = PointHysteresisConfig(graph_k = 29, min_points = 10)
+
+        pts1 = _blob(rng, 1.0, 1.0, 0.005, 30)
+        smld1 = _make_2d_smld(pts1; n_datasets = 1)
+        s1 = trues(30); sup1 = trues(30)
+
+        pts2 = _blob(rng, 5.0, 5.0, 0.005, 30)
+        smld2 = _make_2d_smld(pts2; n_datasets = 1)
+        s2 = trues(30); sup2 = trues(30)
+
+        _, info1 = cluster(smld1, cfg; seed = s1, support = sup1)
+        _, info2 = cluster(smld2, cfg; seed = s2, support = sup2)
+        @test info1.n_clusters == 1
+        @test info2.n_clusters == 1
     end
 
     if SMLM_TEST_FULL
     @testset "wires with LocalContrastFeature: blob in uniform field is recovered" begin
         rng = Xoshiro(20260502)
-        # Uniform background + tight blob; classic seed/support thresholds on
-        # local contrast should recover most of the blob. graph_k=20 keeps the
-        # asymmetric kNN BFS well-connected over the ~200-point blob.
         pts = [(5.0 * rand(rng), 5.0 * rand(rng), 1) for _ in 1:1500]
         blob_start = length(pts) + 1
         append!(pts, _blob(rng, 3.0, 3.0, 0.05, 200))
         blob_end = length(pts)
         smld = _make_2d_smld(pts; n_datasets = 1)
 
-        cfg = LocalContrastFeature(density_k = 20, background_k = 400)
-        _, info_f = cluster_statistics(smld, cfg)
+        feat_cfg = LocalContrastFeature(density_k = 20, background_k = 400)
+        _, info_f = cluster_statistics(smld, feat_cfg)
         c = info_f.extras[:contrast_per_emitter]
         f = info_f.extras[:log_density_per_emitter]
         f_floor = quantile(filter(isfinite, f), 0.35)
         seed = isfinite.(c) .& isfinite.(f) .& (c .> 0.25) .& (f .> f_floor)
         support = isfinite.(c) .& isfinite.(f) .& (c .> -0.05) .& (f .> f_floor)
 
-        _, info = point_hysteresis_clusters(smld, seed, support;
-                                            graph_k = 20, min_points = 30)
+        _, info = cluster(smld,
+            PointHysteresisConfig(graph_k = 20, min_points = 30);
+            seed = seed, support = support)
         @test info.n_clusters >= 1
-        @test info.cluster_sizes[1] >= 100     # most of the 200-point blob
-
-        # Verify the recovered cluster overlaps the blob, not the background.
-        _, idxs_seed = findmax(c)
-        # Largest cluster should contain a substantial fraction of the blob
-        # (membership check via BFS labels would be more direct, but the
-        # cluster_sizes check above + the seed/support thresholds tied to
-        # local contrast already constrain location).
+        @test info.cluster_sizes[1] >= 100
     end
     end  # SMLM_TEST_FULL
 
-end  # @testset point_hysteresis_clusters
+end  # @testset PointHysteresisConfig backend

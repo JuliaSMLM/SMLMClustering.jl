@@ -29,7 +29,7 @@ export AbstractClusterConfig, ClusterInfo, cluster,
        DBSCANConfig, HDBSCANConfig, HierarchicalConfig, VoronoiConfig,
        MRFDensityClusterConfig, calibrate_regime_gaussians,
        calibrate_regime_thresholds,
-       point_hysteresis_clusters,
+       PointHysteresisConfig,
        AbstractStatisticsConfig, ClusterStatisticsInfo, cluster_statistics,
        HopkinsConfig, VoronoiDensityConfig, LocalContrastFeature
 
