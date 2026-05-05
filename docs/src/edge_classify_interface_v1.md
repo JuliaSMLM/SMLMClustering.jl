@@ -81,6 +81,8 @@ script-relative working directory).
 `params.toml` accepts these uppercase keys (any subset; missing keys use
 defaults; unknown keys error): `K_LIST`, `RHO_K_THRESH`, `ALPHA_NM`,
 `REFLECT_RADIUS_NM`, `MEMBRANE_NM`, `FOV_TRUNC_TOL_NM`, `METHOD`,
+`GRID_PX_NM`, `GRID_SMOOTH_NM`, `GRID_MASK_Q`,
+`GRID_MASK_PEAK_FRAC`, `GRID_OUTER_BUFFER_NM`,
 `CONCAVITY_METRIC_BUFFER_NM`. The fully resolved parameter set is
 written to `params.json`.
 
@@ -142,12 +144,17 @@ Asymmetry-based per-emitter gates are NOT part of v1.
 | `REFLECT_RADIUS_NM` | 1500 | nm | mirror band width inboard of truncated sides | provisional |
 | `MEMBRANE_NM` | 100 | nm | band width for membrane class around outer polygon | provisional |
 | `FOV_TRUNC_TOL_NM` | 150 | nm | truncation-detection tolerance | provisional |
-| `METHOD` | `"outer_polygon"` | enum string | classifier method selector — `"outer_polygon"` (v1) or `"concave_refined"` (reserved, errors until later stages land on this branch) | provisional |
+| `METHOD` | `"outer_polygon"` | enum string | classifier method selector — `"outer_polygon"` (v1 default), `"grid_hybrid"` (opt-in density-grid membrane promotion), or `"concave_refined"` (reserved, errors) | provisional |
+| `GRID_PX_NM` | 50 | nm | grid cell size for `METHOD="grid_hybrid"`; ignored by outer-only v1 | provisional |
+| `GRID_SMOOTH_NM` | 80 | nm | Gaussian smoothing σ for the density grid in `METHOD="grid_hybrid"` | provisional |
+| `GRID_MASK_Q` | 0.03 | — | lower quantile floor for nonzero smoothed grid threshold in `METHOD="grid_hybrid"` | provisional |
+| `GRID_MASK_PEAK_FRAC` | 0.26 | — | peak-relative smoothed grid threshold in `METHOD="grid_hybrid"` | provisional |
+| `GRID_OUTER_BUFFER_NM` | 800 | nm | max distance from v1 outer polygon for interior→membrane promotion in `METHOD="grid_hybrid"` | provisional |
 | `CONCAVITY_METRIC_BUFFER_NM` | 2000 | nm | buffer around the outer polygon in which `compute_concavity_metric` evaluates suspects; does not affect classification | provisional |
 
 All parameter keys uppercase. Defaults will move as we tune; callers pinning
 a specific parameter set should record `params_used` from `params.json`
-(which now records `METHOD` and `CONCAVITY_METRIC_BUFFER_NM` as well).
+(which records all resolved method and grid parameters as well).
 
 ---
 
@@ -302,7 +309,11 @@ Provenance contract for run comparison.
   "params": {
     "K_LIST": [16, 128], "RHO_K_THRESH": 200, "ALPHA_NM": 300,
     "REFLECT_RADIUS_NM": 1500, "MEMBRANE_NM": 100, "FOV_TRUNC_TOL_NM": 150,
-    "METHOD": "outer_polygon", "CONCAVITY_METRIC_BUFFER_NM": 2000
+    "METHOD": "outer_polygon",
+    "GRID_PX_NM": 50, "GRID_SMOOTH_NM": 80,
+    "GRID_MASK_Q": 0.03, "GRID_MASK_PEAK_FRAC": 0.26,
+    "GRID_OUTER_BUFFER_NM": 800,
+    "CONCAVITY_METRIC_BUFFER_NM": 2000
   },
   "runtime_s": 612.4
 }
@@ -329,7 +340,7 @@ Single index point. Consumers read this first.
   "artifacts": {
     "classified_tsv":     {"path": "classified.tsv",     "schema_version": 1},
     "polygon_loops_tsv":  {"path": "polygon_loops.tsv",  "schema_version": 1},
-    "loop_diagnostics_csv": {"path": "loop_diagnostics.csv", "schema_version": 1},
+    "loop_diagnostics_csv": {"path": "loop_diagnostics.csv", "schema_version": 2},
     "params_json":        {"path": "params.json",        "schema_version": 1},
     "classified_png":     {"path": "classified.png",     "written": false, "schema_version": null},
     "loop_overlay_png":   {"path": "loop_overlay.png",   "written": false, "schema_version": null}
@@ -354,7 +365,13 @@ should consume the TSV/CSV/JSON artifacts, not the PNGs.
 
 - `class` in `classified.tsv` is the canonical per-emitter answer.
 - `outside ∪ membrane ∪ interior == all input emitters`, intersections empty.
-- v1 decision: outer loop only. Interior loops are diagnostic.
+- `METHOD="outer_polygon"` decision: outer loop only. Interior loops are diagnostic.
+- `METHOD="grid_hybrid"` preserves the outer-loop `outside`/`interior`
+  topology, then promotes only v1 `interior` emitters to `membrane` when
+  they lie both on the local density-grid boundary and within
+  `GRID_OUTER_BUFFER_NM` of the v1 outer polygon. It never demotes
+  `membrane`, never changes `outside`, and does not use diagnostic
+  interior loops for class decisions.
 
 ---
 

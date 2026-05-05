@@ -14,6 +14,11 @@ using SMLMClustering: EdgeClassify
         @test p.MEMBRANE_NM == 100.0
         @test p.FOV_TRUNC_TOL_NM == 150.0
         @test p.METHOD == "outer_polygon"
+        @test p.GRID_PX_NM == 50.0
+        @test p.GRID_SMOOTH_NM == 80.0
+        @test p.GRID_MASK_Q == 0.03
+        @test p.GRID_MASK_PEAK_FRAC == 0.26
+        @test p.GRID_OUTER_BUFFER_NM == 800.0
         @test p.CONCAVITY_METRIC_BUFFER_NM == 2000.0
     end
 
@@ -27,6 +32,70 @@ using SMLMClustering: EdgeClassify
         @test_throws ArgumentError classify_emitters(x, y;
             fov_um = (0.0, 1.0, 0.0, 1.0),
             params = EdgeClassifyParams(METHOD = "concave_refined"))
+    end
+
+    @testset "grid_hybrid synthetic GT" begin
+        function membrane_prf(pred, truth)
+            tp = count(i -> pred[i] == "membrane" && truth[i] == "membrane", eachindex(pred))
+            fp = count(i -> pred[i] == "membrane" && truth[i] != "membrane", eachindex(pred))
+            fn = count(i -> pred[i] != "membrane" && truth[i] == "membrane", eachindex(pred))
+            precision = tp / max(tp + fp, 1)
+            recall = tp / max(tp + fn, 1)
+            f1 = (precision + recall) == 0 ? 0.0 : 2 * precision * recall / (precision + recall)
+            return precision, recall, f1
+        end
+
+        function sample_crescent(seed; n_cell = 16000, n_noise = 800)
+            rng = Random.MersenneTwister(seed)
+            cx_big, cy_big, R_big = 5.0, 5.0, 3.0
+            cx_sm, cy_sm, R_sm = 7.5, 5.0, 2.2
+            x = Float64[]; y = Float64[]
+            while length(x) < n_cell
+                xx = cx_big - R_big + 2 * R_big * rand(rng)
+                yy = cy_big - R_big + 2 * R_big * rand(rng)
+                in_big = (xx - cx_big)^2 + (yy - cy_big)^2 <= R_big^2
+                in_small = (xx - cx_sm)^2 + (yy - cy_sm)^2 <= R_sm^2
+                if in_big && !in_small
+                    push!(x, xx); push!(y, yy)
+                end
+            end
+            append!(x, 10 .* rand(rng, n_noise))
+            append!(y, 10 .* rand(rng, n_noise))
+            truth = Vector{String}(undef, length(x))
+            for i in eachindex(x)
+                in_big = (x[i] - cx_big)^2 + (y[i] - cy_big)^2 <= R_big^2
+                in_small = (x[i] - cx_sm)^2 + (y[i] - cy_sm)^2 <= R_sm^2
+                if !(in_big && !in_small)
+                    truth[i] = "outside"
+                else
+                    d_big = abs(hypot(x[i] - cx_big, y[i] - cy_big) - R_big)
+                    d_bay = abs(hypot(x[i] - cx_sm, y[i] - cy_sm) - R_sm)
+                    truth[i] = min(d_big, d_bay) <= 0.10 ? "membrane" : "interior"
+                end
+            end
+            return x, y, truth
+        end
+
+        x, y, truth = sample_crescent(72)
+        base_params = EdgeClassifyParams(K_LIST = [8, 32], RHO_K_THRESH = 50.0,
+                                         ALPHA_NM = 400.0, MEMBRANE_NM = 100.0,
+                                         REFLECT_RADIUS_NM = 200.0)
+        v1 = classify_emitters(x, y; fov_um = (0.0, 10.0, 0.0, 10.0),
+                               params = base_params)
+        hybrid = classify_emitters(x, y; fov_um = (0.0, 10.0, 0.0, 10.0),
+                                   params = EdgeClassifyParams(
+                                       K_LIST = base_params.K_LIST,
+                                       RHO_K_THRESH = base_params.RHO_K_THRESH,
+                                       ALPHA_NM = base_params.ALPHA_NM,
+                                       MEMBRANE_NM = base_params.MEMBRANE_NM,
+                                       REFLECT_RADIUS_NM = base_params.REFLECT_RADIUS_NM,
+                                       METHOD = "grid_hybrid"))
+        vp, vr, vf = membrane_prf(v1.class, truth)
+        hp, hr, hf = membrane_prf(hybrid.class, truth)
+        @test count(==("outside"), hybrid.class) == count(==("outside"), v1.class)
+        @test hr > vr + 0.10
+        @test hf > vf + 0.05
+        @test hp > 0.75
     end
 
     @testset "fov_um validation" begin

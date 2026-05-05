@@ -51,7 +51,8 @@ function classify_emitters(
     if params.METHOD == _METHOD_CONCAVE_REFINED
         throw(ArgumentError(
             "METHOD=\"concave_refined\" is reserved for the concave-membrane " *
-            "branch and is not implemented yet; use METHOD=\"outer_polygon\""))
+            "branch and is not implemented yet; use METHOD=\"outer_polygon\" " *
+            "or METHOD=\"grid_hybrid\""))
     end
     if write_artifacts
         out_dir === nothing &&
@@ -112,6 +113,10 @@ function classify_emitters(
         else
             class[i] = "interior"
         end
+    end
+
+    if params.METHOD == _METHOD_GRID_HYBRID
+        _apply_grid_hybrid!(class, x, y, dist_to_outer, fov_um, params)
     end
 
     # Per-loop diagnostics — uses originals-only KDTree.

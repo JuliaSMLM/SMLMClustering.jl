@@ -48,7 +48,9 @@ function _load_params_toml(path::AbstractString)
     raw = TOML.parsefile(path)
     known = Set(["K_LIST","RHO_K_THRESH","ALPHA_NM","REFLECT_RADIUS_NM",
                  "MEMBRANE_NM","FOV_TRUNC_TOL_NM",
-                 "METHOD","CONCAVITY_METRIC_BUFFER_NM"])
+                 "METHOD","GRID_PX_NM","GRID_SMOOTH_NM","GRID_MASK_Q",
+                 "GRID_MASK_PEAK_FRAC","GRID_OUTER_BUFFER_NM",
+                 "CONCAVITY_METRIC_BUFFER_NM"])
     unknown = setdiff(keys(raw), known)
     isempty(unknown) || error("unknown params keys: $(collect(unknown))")
     kw = Dict{Symbol,Any}()
@@ -59,6 +61,13 @@ function _load_params_toml(path::AbstractString)
     haskey(raw, "MEMBRANE_NM")      && (kw[:MEMBRANE_NM] = Float64(raw["MEMBRANE_NM"]))
     haskey(raw, "FOV_TRUNC_TOL_NM") && (kw[:FOV_TRUNC_TOL_NM] = Float64(raw["FOV_TRUNC_TOL_NM"]))
     haskey(raw, "METHOD")           && (kw[:METHOD] = String(raw["METHOD"]))
+    haskey(raw, "GRID_PX_NM")       && (kw[:GRID_PX_NM] = Float64(raw["GRID_PX_NM"]))
+    haskey(raw, "GRID_SMOOTH_NM")   && (kw[:GRID_SMOOTH_NM] = Float64(raw["GRID_SMOOTH_NM"]))
+    haskey(raw, "GRID_MASK_Q")      && (kw[:GRID_MASK_Q] = Float64(raw["GRID_MASK_Q"]))
+    haskey(raw, "GRID_MASK_PEAK_FRAC") &&
+        (kw[:GRID_MASK_PEAK_FRAC] = Float64(raw["GRID_MASK_PEAK_FRAC"]))
+    haskey(raw, "GRID_OUTER_BUFFER_NM") &&
+        (kw[:GRID_OUTER_BUFFER_NM] = Float64(raw["GRID_OUTER_BUFFER_NM"]))
     haskey(raw, "CONCAVITY_METRIC_BUFFER_NM") &&
         (kw[:CONCAVITY_METRIC_BUFFER_NM] = Float64(raw["CONCAVITY_METRIC_BUFFER_NM"]))
     return EdgeClassifyParams(; kw...)

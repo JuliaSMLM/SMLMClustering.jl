@@ -160,6 +160,11 @@ function _params_to_dict(p::EdgeClassifyParams)
         "MEMBRANE_NM"                => p.MEMBRANE_NM,
         "FOV_TRUNC_TOL_NM"           => p.FOV_TRUNC_TOL_NM,
         "METHOD"                     => p.METHOD,
+        "GRID_PX_NM"                 => p.GRID_PX_NM,
+        "GRID_SMOOTH_NM"             => p.GRID_SMOOTH_NM,
+        "GRID_MASK_Q"                => p.GRID_MASK_Q,
+        "GRID_MASK_PEAK_FRAC"        => p.GRID_MASK_PEAK_FRAC,
+        "GRID_OUTER_BUFFER_NM"       => p.GRID_OUTER_BUFFER_NM,
         "CONCAVITY_METRIC_BUFFER_NM" => p.CONCAVITY_METRIC_BUFFER_NM,
     )
 end

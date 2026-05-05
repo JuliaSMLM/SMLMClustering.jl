@@ -14,9 +14,15 @@ Base.@kwdef struct EdgeClassifyParams
     MEMBRANE_NM::Float64           = 100.0
     FOV_TRUNC_TOL_NM::Float64      = 150.0
     # Method selector. Default "outer_polygon" preserves v1 behavior bit-for-bit.
-    # "concave_refined" is reserved for the staged improvements developed on the
-    # edge-classify-concave-membrane branch; it errors until those stages land.
+    # "grid_hybrid" preserves the v1 outside/interior topology and promotes
+    # only v1-interior emitters that lie on a local density-grid boundary near
+    # the v1 outer polygon.
     METHOD::String                 = "outer_polygon"
+    GRID_PX_NM::Float64            = 50.0
+    GRID_SMOOTH_NM::Float64        = 80.0
+    GRID_MASK_Q::Float64           = 0.03
+    GRID_MASK_PEAK_FRAC::Float64   = 0.26
+    GRID_OUTER_BUFFER_NM::Float64  = 800.0
     # Concavity-evaluation buffer. Interior emitters within this distance of the
     # outer polygon are eligible to be flagged as "suspect" by the concavity
     # metric. Used by `compute_concavity_metric` only; does not affect class.
@@ -25,7 +31,8 @@ end
 
 const _METHOD_OUTER_POLYGON   = "outer_polygon"
 const _METHOD_CONCAVE_REFINED = "concave_refined"
-const _VALID_METHODS = (_METHOD_OUTER_POLYGON, _METHOD_CONCAVE_REFINED)
+const _METHOD_GRID_HYBRID     = "grid_hybrid"
+const _VALID_METHODS = (_METHOD_OUTER_POLYGON, _METHOD_GRID_HYBRID, _METHOD_CONCAVE_REFINED)
 
 """
     LoopDiagnostic

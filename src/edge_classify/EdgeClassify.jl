@@ -40,6 +40,7 @@ export classify_emitters,
 
 include("types.jl")
 include("geometry.jl")
+include("grid_hybrid.jl")
 include("diagnostics.jl")
 include("io.jl")
 include("classify.jl")
