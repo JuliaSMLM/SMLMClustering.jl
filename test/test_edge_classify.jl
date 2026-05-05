@@ -146,11 +146,23 @@ using SMLMClustering: EdgeClassify
             @test occursin("\"out_dir\"", mtxt)
             @test occursin("\"leaf_dir\"", mtxt)
 
-            # params.json carries the actual params used
+            # params.json carries the actual params used (incl. METHOD,
+            # CONCAVITY_METRIC_BUFFER_NM added in Stage 1).
             ptxt = read(joinpath(leaf, "params.json"), String)
             @test occursin("\"K_LIST\"", ptxt)
             @test occursin("\"ALPHA_NM\"", ptxt)
             @test occursin("\"truncated_sides\"", ptxt)
+            @test occursin("\"METHOD\"", ptxt)
+            @test occursin("\"outer_polygon\"", ptxt)
+            @test occursin("\"CONCAVITY_METRIC_BUFFER_NM\"", ptxt)
+
+            # manifest.json reports the bumped loop_diagnostics_csv
+            # schema_version (2 since Stage 1).
+            mtxt2 = read(joinpath(leaf, "manifest.json"), String)
+            @test occursin("\"loop_diagnostics_csv\"", mtxt2)
+            # Schema version 2 must appear in the file (it is the only
+            # schema_version: 2 entry under artifacts).
+            @test occursin("\"schema_version\": 2", mtxt2)
         end
     end
 

@@ -78,6 +78,37 @@ The CLI **always** writes artifacts. `--out` is **authoritative**: outputs
 go strictly under that path (no fallback to `dev/scripts/output` or any
 script-relative working directory).
 
+`params.toml` accepts these uppercase keys (any subset; missing keys use
+defaults; unknown keys error): `K_LIST`, `RHO_K_THRESH`, `ALPHA_NM`,
+`REFLECT_RADIUS_NM`, `MEMBRANE_NM`, `FOV_TRUNC_TOL_NM`, `METHOD`,
+`CONCAVITY_METRIC_BUFFER_NM`. The fully resolved parameter set is
+written to `params.json`.
+
+### 1d. Concavity metric (Stage 1, this branch)
+
+```julia
+report = compute_concavity_metric(result, x_um, y_um;
+    buffer_um = result.params_used.CONCAVITY_METRIC_BUFFER_NM/1000,
+    asym_R_nm = 1000.0, asym_gate = 0.20, rho_lo = 200.0,
+    intracellular_dense_threshold = 0.8)::ConcavityMetricReport
+```
+
+Boundary-proximal, loop-aware concavity-error metric for the v1
+outer-polygon classifier. Identifies v1 `interior` emitters that are
+within `buffer_um` of the outer polygon, have high directional asymmetry
+at long radius, and low local density — the chord-vertex signature of a
+deep concave bay the alpha-shape bridged across.
+
+Excludes emitters inside intracellular-void loops (raw-metric: non-outer
+loops with `frac_in_fov == 1.0` AND `frac_dense >=
+intracellular_dense_threshold`), so nuclei / sparse intracellular regions
+are not counted as membrane concavity errors. Stratifies suspects by
+whether the nearest outer-polygon segment is interior-FOV (Approach B
+target — vertex snap to asym ridge) or FOV-edge (Approach C target —
+FOV-crossing loops as auxiliary boundary).
+
+The metric does **not** modify classification; it is read-only post-hoc.
+
 ---
 
 ## 2. Inputs
@@ -111,9 +142,12 @@ Asymmetry-based per-emitter gates are NOT part of v1.
 | `REFLECT_RADIUS_NM` | 1500 | nm | mirror band width inboard of truncated sides | provisional |
 | `MEMBRANE_NM` | 100 | nm | band width for membrane class around outer polygon | provisional |
 | `FOV_TRUNC_TOL_NM` | 150 | nm | truncation-detection tolerance | provisional |
+| `METHOD` | `"outer_polygon"` | enum string | classifier method selector — `"outer_polygon"` (v1) or `"concave_refined"` (reserved, errors until later stages land on this branch) | provisional |
+| `CONCAVITY_METRIC_BUFFER_NM` | 2000 | nm | buffer around the outer polygon in which `compute_concavity_metric` evaluates suspects; does not affect classification | provisional |
 
 All parameter keys uppercase. Defaults will move as we tune; callers pinning
-a specific parameter set should record `params_used` from `params.json`.
+a specific parameter set should record `params_used` from `params.json`
+(which now records `METHOD` and `CONCAVITY_METRIC_BUFFER_NM` as well).
 
 ---
 
@@ -199,20 +233,22 @@ Vertex coordinates **may lie outside the FOV** when they came from mirrored
 emitters. Consumers wanting in-FOV-only vertices should filter against the
 FOV bounds (recorded in `params.json` as `fov_um`).
 
-### 4c. `loop_diagnostics.csv` — STABLE columns; `type` PROVISIONAL
+### 4c. `loop_diagnostics.csv` — schema_version 2 on this branch
 
 Per-loop summary. Includes **`loop_id == 1`** as well as all interior loops.
+A `# schema_version: 2` header comment line precedes the column header.
 
 ```
-loop_id,vertex_count,area_um2,n_emitters_inside,frac_in_fov,frac_dense,median_rhoK,heuristic_type
-1,1060,606.49,288910,0.66,0.91,231,outer
-2,52,4.74,314,0.50,0.44,98,fov_crossing
-3,38,3.29,418,1.00,1.00,219,interior_dense
+# schema_version: 2
+loop_id,vertex_count,area_um2,n_emitters_inside,frac_in_fov,frac_dense,median_rhoK,used_in_outer,heuristic_type
+1,1060,606.49,288910,0.66,0.91,231,true,outer
+2,52,4.74,314,0.50,0.44,98,false,fov_crossing
+3,38,3.29,418,1.00,1.00,219,false,interior_dense
 ...
 ```
 
-Column order is fixed: stable columns first (in the order below), then
-`heuristic_type` last.
+Column order is fixed: stable columns first (in the order below),
+`used_in_outer` second-to-last, `heuristic_type` last.
 
 | Column | Type | Stability | Meaning |
 |--------|------|-----------|---------|
@@ -223,7 +259,12 @@ Column order is fixed: stable columns first (in the order below), then
 | `frac_in_fov` | float in [0,1] | stable | fraction of vertices inside `fov_um` |
 | `frac_dense` | float in [0,1] | stable | fraction of vertices with ρ_K(K=128) ≥ `RHO_K_THRESH`, evaluated against the **originals-only** KDTree |
 | `median_rhoK` | float | stable | median ρ_K(K=128) across loop vertices (originals KDTree) |
+| `used_in_outer` | bool | stable (added in schema 2) | true iff this loop participates in the `inside_outer` decision. v1 outer-polygon: only `loop_id == 1`. Future methods may promote auxiliary loops. |
 | `heuristic_type` | enum string | name & presence stable; values & thresholds PROVISIONAL | human-diagnostic loop label (see below) |
+
+The `manifest.json` `artifacts.loop_diagnostics_csv.schema_version` is
+bumped to `2` accordingly. Manifest top-level `schema_version` remains
+`1` (additive change to one artifact).
 
 **`heuristic_type` (column name stable, values PROVISIONAL — do not branch on it)**:
 
@@ -260,7 +301,8 @@ Provenance contract for run comparison.
   "truncated_sides": {"L": true, "R": true, "B": true, "T": true},
   "params": {
     "K_LIST": [16, 128], "RHO_K_THRESH": 200, "ALPHA_NM": 300,
-    "REFLECT_RADIUS_NM": 1500, "MEMBRANE_NM": 100, "FOV_TRUNC_TOL_NM": 150
+    "REFLECT_RADIUS_NM": 1500, "MEMBRANE_NM": 100, "FOV_TRUNC_TOL_NM": 150,
+    "METHOD": "outer_polygon", "CONCAVITY_METRIC_BUFFER_NM": 2000
   },
   "runtime_s": 612.4
 }

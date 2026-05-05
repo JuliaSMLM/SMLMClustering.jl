@@ -47,7 +47,8 @@ end
 function _load_params_toml(path::AbstractString)
     raw = TOML.parsefile(path)
     known = Set(["K_LIST","RHO_K_THRESH","ALPHA_NM","REFLECT_RADIUS_NM",
-                 "MEMBRANE_NM","FOV_TRUNC_TOL_NM"])
+                 "MEMBRANE_NM","FOV_TRUNC_TOL_NM",
+                 "METHOD","CONCAVITY_METRIC_BUFFER_NM"])
     unknown = setdiff(keys(raw), known)
     isempty(unknown) || error("unknown params keys: $(collect(unknown))")
     kw = Dict{Symbol,Any}()
@@ -57,6 +58,9 @@ function _load_params_toml(path::AbstractString)
     haskey(raw, "REFLECT_RADIUS_NM")&& (kw[:REFLECT_RADIUS_NM] = Float64(raw["REFLECT_RADIUS_NM"]))
     haskey(raw, "MEMBRANE_NM")      && (kw[:MEMBRANE_NM] = Float64(raw["MEMBRANE_NM"]))
     haskey(raw, "FOV_TRUNC_TOL_NM") && (kw[:FOV_TRUNC_TOL_NM] = Float64(raw["FOV_TRUNC_TOL_NM"]))
+    haskey(raw, "METHOD")           && (kw[:METHOD] = String(raw["METHOD"]))
+    haskey(raw, "CONCAVITY_METRIC_BUFFER_NM") &&
+        (kw[:CONCAVITY_METRIC_BUFFER_NM] = Float64(raw["CONCAVITY_METRIC_BUFFER_NM"]))
     return EdgeClassifyParams(; kw...)
 end
 

@@ -70,8 +70,16 @@ function compute_concavity_metric(
     end
     tree = NearestNeighbors.KDTree(Xorig)
 
+    # Pre-compute ρ_K(K=128) for ALL originals using the same convention as
+    # geometry.jl's `_knn_K_density`: when the query point is itself a member
+    # of the tree, knn(tree, X, K+1) returns self at index 1 (distance 0)
+    # and the K-th true neighbor at index K+1; the density estimator is
+    # (K-1) / (π · d_K²) for 2D — counts K-1 strict-interior neighbors in an
+    # open disk of radius d_K. Matches `_tissue_mask` and `_compute_loop_diagnostics`.
+    K_density = 128
+    rho_all = _knn_K_density(Xorig, K_density, tree)
+
     asym_R_um = asym_R_nm / 1000
-    inv_pi = 1 / π
 
     n_interior = sum(==("interior"), result.class)
     n_eligible = 0
@@ -108,11 +116,8 @@ function compute_concavity_metric(
         asym = hypot(cx - x_um[i], cy - y_um[i]) / asym_R_um
         asym >= asym_gate || continue
 
-        # Local density ρ_K(K=128).
-        _, dists = NearestNeighbors.knn(tree, [x_um[i], y_um[i]], 129, true)
-        d128 = dists[end]
-        rho = (128 - 1) * inv_pi / (d128 * d128)
-        rho <= rho_lo || continue
+        # Local density ρ_K(K=128) — pre-computed against originals KDTree.
+        rho_all[i] <= rho_lo || continue
 
         # Stratify by nearest outer segment.
         # Find nearest segment: argmin over i of dist to segment (i, i+1).

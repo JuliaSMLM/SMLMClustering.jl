@@ -153,12 +153,14 @@ end
 
 function _params_to_dict(p::EdgeClassifyParams)
     return Dict{String,Any}(
-        "K_LIST"            => collect(Int, p.K_LIST),
-        "RHO_K_THRESH"      => p.RHO_K_THRESH,
-        "ALPHA_NM"          => p.ALPHA_NM,
-        "REFLECT_RADIUS_NM" => p.REFLECT_RADIUS_NM,
-        "MEMBRANE_NM"       => p.MEMBRANE_NM,
-        "FOV_TRUNC_TOL_NM"  => p.FOV_TRUNC_TOL_NM,
+        "K_LIST"                     => collect(Int, p.K_LIST),
+        "RHO_K_THRESH"               => p.RHO_K_THRESH,
+        "ALPHA_NM"                   => p.ALPHA_NM,
+        "REFLECT_RADIUS_NM"          => p.REFLECT_RADIUS_NM,
+        "MEMBRANE_NM"                => p.MEMBRANE_NM,
+        "FOV_TRUNC_TOL_NM"           => p.FOV_TRUNC_TOL_NM,
+        "METHOD"                     => p.METHOD,
+        "CONCAVITY_METRIC_BUFFER_NM" => p.CONCAVITY_METRIC_BUFFER_NM,
     )
 end
 
