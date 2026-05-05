@@ -45,4 +45,10 @@ include("backends/local_contrast.jl")
 include("backends/mrf_density.jl")
 include("backends/point_hysteresis.jl")
 
+include("edge_classify/EdgeClassify.jl")
+using .EdgeClassify: classify_emitters,
+                     EdgeClassifyParams, EdgeClassificationResult, LoopDiagnostic
+export classify_emitters,
+       EdgeClassifyParams, EdgeClassificationResult, LoopDiagnostic
+
 end
