@@ -85,7 +85,7 @@ end
 
 const _SCHEMA_VERSION_CLASSIFIED = 1
 const _SCHEMA_VERSION_POLYGON_LOOPS = 1
-const _SCHEMA_VERSION_LOOP_DIAGNOSTICS = 1
+const _SCHEMA_VERSION_LOOP_DIAGNOSTICS = 2
 const _SCHEMA_VERSION_PARAMS = 1
 const _SCHEMA_VERSION_MANIFEST = 1
 
@@ -135,8 +135,9 @@ end
 function _write_loop_diagnostics_csv(path::AbstractString,
                                      result::EdgeClassificationResult)
     open(path, "w") do io
+        println(io, "# schema_version: ", _SCHEMA_VERSION_LOOP_DIAGNOSTICS)
         println(io, "loop_id,vertex_count,area_um2,n_emitters_inside,",
-                    "frac_in_fov,frac_dense,median_rhoK,heuristic_type")
+                    "frac_in_fov,frac_dense,median_rhoK,used_in_outer,heuristic_type")
         for d in result.loop_diagnostics
             println(io, d.loop_id, ",", d.vertex_count, ",",
                     round(d.area_um2; digits=4), ",",
@@ -144,6 +145,7 @@ function _write_loop_diagnostics_csv(path::AbstractString,
                     round(d.frac_in_fov; digits=4), ",",
                     round(d.frac_dense; digits=4), ",",
                     round(d.median_rhoK; digits=2), ",",
+                    d.used_in_outer, ",",
                     d.heuristic_type)
         end
     end

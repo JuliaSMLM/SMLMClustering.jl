@@ -46,6 +46,13 @@ function classify_emitters(
         throw(ArgumentError("fov_um requires xmin < xmax (got $(fov_um[1]) >= $(fov_um[2]))"))
     fov_um[3] < fov_um[4] ||
         throw(ArgumentError("fov_um requires ymin < ymax (got $(fov_um[3]) >= $(fov_um[4]))"))
+    params.METHOD in _VALID_METHODS ||
+        throw(ArgumentError("params.METHOD must be one of $(_VALID_METHODS); got \"$(params.METHOD)\""))
+    if params.METHOD == _METHOD_CONCAVE_REFINED
+        throw(ArgumentError(
+            "METHOD=\"concave_refined\" is reserved for the concave-membrane " *
+            "branch and is not implemented yet; use METHOD=\"outer_polygon\""))
+    end
     if write_artifacts
         out_dir === nothing &&
             throw(ArgumentError("write_artifacts=true requires out_dir"))

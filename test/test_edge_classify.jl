@@ -13,6 +13,20 @@ using SMLMClustering: EdgeClassify
         @test p.REFLECT_RADIUS_NM == 1500.0
         @test p.MEMBRANE_NM == 100.0
         @test p.FOV_TRUNC_TOL_NM == 150.0
+        @test p.METHOD == "outer_polygon"
+        @test p.CONCAVITY_METRIC_BUFFER_NM == 2000.0
+    end
+
+    @testset "METHOD selector" begin
+        x = [0.0, 1.0]; y = [0.0, 1.0]
+        # Unknown method errors
+        @test_throws ArgumentError classify_emitters(x, y;
+            fov_um = (0.0, 1.0, 0.0, 1.0),
+            params = EdgeClassifyParams(METHOD = "bogus"))
+        # concave_refined reserved → not implemented yet on baseline path
+        @test_throws ArgumentError classify_emitters(x, y;
+            fov_um = (0.0, 1.0, 0.0, 1.0),
+            params = EdgeClassifyParams(METHOD = "concave_refined"))
     end
 
     @testset "fov_um validation" begin
@@ -112,12 +126,17 @@ using SMLMClustering: EdgeClassify
             ploops = readlines(joinpath(leaf, "polygon_loops.tsv"))
             @test any(l -> startswith(l, "loop_id\tvertex_id\tx_um\ty_um"), ploops)
 
-            # loop_diagnostics.csv columns + heuristic_type LAST
+            # loop_diagnostics.csv schema 2 + used_in_outer before heuristic_type LAST
             lcsv = readlines(joinpath(leaf, "loop_diagnostics.csv"))
-            cols = split(lcsv[1], ",")
+            schema_line = first(filter(l -> startswith(l, "# schema_version"), lcsv))
+            @test occursin("schema_version: 2", schema_line)
+            colhdr = first(filter(l -> startswith(l, "loop_id,"), lcsv))
+            cols = split(colhdr, ",")
             @test cols == ["loop_id","vertex_count","area_um2","n_emitters_inside",
-                           "frac_in_fov","frac_dense","median_rhoK","heuristic_type"]
+                           "frac_in_fov","frac_dense","median_rhoK",
+                           "used_in_outer","heuristic_type"]
             @test cols[end] == "heuristic_type"
+            @test cols[end-1] == "used_in_outer"
 
             # manifest.json basic well-formedness
             mtxt = read(joinpath(leaf, "manifest.json"), String)
@@ -133,6 +152,62 @@ using SMLMClustering: EdgeClassify
             @test occursin("\"ALPHA_NM\"", ptxt)
             @test occursin("\"truncated_sides\"", ptxt)
         end
+    end
+
+    @testset "synthetic crescent: v1 misclassifies bay" begin
+        # Crescent = (large disk) minus (smaller offset disk). The bay is
+        # the missing-disk region; emitters do not exist there. v1's
+        # alpha-shape outer polygon will SMOOTH ACROSS the concave bay
+        # mouth, then point-in-polygon will say "inside" for any test
+        # location in the bay. The concavity metric should run cleanly on
+        # boundary-proximal interior emitters near the bay opening.
+        rng = Random.MersenneTwister(7)
+        cx_big, cy_big, R_big = 5.0, 5.0, 3.0
+        cx_sm,  cy_sm,  R_sm  = 7.5, 5.0, 2.2
+        npts = 30000
+        xs = Float64[]; ys = Float64[]
+        while length(xs) < npts
+            xx = cx_big - R_big + 2*R_big*rand(rng)
+            yy = cy_big - R_big + 2*R_big*rand(rng)
+            in_big = (xx-cx_big)^2 + (yy-cy_big)^2 <= R_big^2
+            in_small = (xx-cx_sm)^2 + (yy-cy_sm)^2 <= R_sm^2
+            if in_big && !in_small
+                push!(xs, xx); push!(ys, yy)
+            end
+        end
+
+        result = classify_emitters(xs, ys; fov_um = (0.0, 10.0, 0.0, 10.0),
+            params = EdgeClassifyParams(K_LIST = [8, 32], RHO_K_THRESH = 50.0,
+                                        ALPHA_NM = 400.0, MEMBRANE_NM = 100.0,
+                                        REFLECT_RADIUS_NM = 200.0))
+
+        @test sum(==("outside"), result.class) +
+              sum(==("membrane"), result.class) +
+              sum(==("interior"), result.class) == length(xs)
+
+        cm = compute_concavity_metric(result, xs, ys;
+                                      asym_R_nm = 800.0, asym_gate = 0.10,
+                                      rho_lo = 1e6)
+        @test cm.n_interior >= 0
+        @test cm.n_eligible >= 0
+        @test cm.n_suspect >= 0
+        @test length(cm.suspect_x_um) == cm.n_suspect
+        @test length(cm.suspect_y_um) == cm.n_suspect
+        @test length(cm.suspect_is_fov_edge) == cm.n_suspect
+        @test cm.n_suspect_interior_fov + cm.n_suspect_fov_edge == cm.n_suspect
+    end
+
+    @testset "concavity metric: length validation" begin
+        rng = Random.MersenneTwister(99)
+        npts = 500
+        u = rand(rng, npts); v = rand(rng, npts)
+        r = sqrt.(u); θ = 2π .* v
+        x = 5.0 .+ 2.0 .* r .* cos.(θ); y = 5.0 .+ 2.0 .* r .* sin.(θ)
+        result = classify_emitters(x, y; fov_um = (0.0, 10.0, 0.0, 10.0),
+            params = EdgeClassifyParams(K_LIST = [4, 16], RHO_K_THRESH = 5.0,
+                                        ALPHA_NM = 800.0, REFLECT_RADIUS_NM = 100.0))
+        @test_throws ArgumentError compute_concavity_metric(result, x[1:end-1], y)
+        @test_throws ArgumentError compute_concavity_metric(result, x, y[1:end-1])
     end
 
 end

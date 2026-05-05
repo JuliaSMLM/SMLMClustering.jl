@@ -55,8 +55,13 @@ function _compute_loop_diagnostics(
         med_rho = Statistics.median(rhos)
         frac_in_fov = in_fov_count / nv
 
+        # v1 outer-polygon classifier: only loop_id == 1 participates in
+        # inside_outer. Future "concave_refined" method may promote
+        # additional loops; that decision will be made at result-build time.
+        used_in_outer = (lid == 1)
         diags[lid] = LoopDiagnostic(
             lid, nv, area, n_inside, frac_in_fov, frac_dense, med_rho,
+            used_in_outer,
             _heuristic_type(lid, frac_in_fov, frac_dense),
         )
     end

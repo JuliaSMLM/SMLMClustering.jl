@@ -35,7 +35,8 @@ using Statistics
 using Dates
 
 export classify_emitters,
-       EdgeClassifyParams, EdgeClassificationResult, LoopDiagnostic
+       EdgeClassifyParams, EdgeClassificationResult, LoopDiagnostic,
+       compute_concavity_metric, ConcavityMetricReport
 
 include("types.jl")
 include("geometry.jl")
@@ -43,5 +44,6 @@ include("diagnostics.jl")
 include("io.jl")
 include("classify.jl")
 include("smld_adapter.jl")
+include("concavity_metric.jl")
 
 end # module EdgeClassify
