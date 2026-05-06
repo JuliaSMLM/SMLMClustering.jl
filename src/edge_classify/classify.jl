@@ -51,8 +51,20 @@ function classify_emitters(
     if params.METHOD == _METHOD_CONCAVE_REFINED
         throw(ArgumentError(
             "METHOD=\"concave_refined\" is reserved for the concave-membrane " *
-            "branch and is not implemented yet; use METHOD=\"outer_polygon\" " *
-            "or METHOD=\"grid_hybrid\""))
+            "branch and is not implemented yet; use METHOD=\"outer_polygon\", " *
+            "\"grid_hybrid\", or \"mask_carve\""))
+    end
+    if params.METHOD == _METHOD_MASK_CARVE
+        params.MASK_CARVE_SIGMA_UM > 0 ||
+            throw(ArgumentError("MASK_CARVE_SIGMA_UM must be positive; got $(params.MASK_CARVE_SIGMA_UM)"))
+        params.MASK_CARVE_PIXEL_UM > 0 ||
+            throw(ArgumentError("MASK_CARVE_PIXEL_UM must be positive; got $(params.MASK_CARVE_PIXEL_UM)"))
+        params.MASK_CARVE_K_NOISE > 0 ||
+            throw(ArgumentError("MASK_CARVE_K_NOISE must be positive; got $(params.MASK_CARVE_K_NOISE)"))
+        params.MASK_CARVE_MIN_COMPONENT_FRAC >= 0 ||
+            throw(ArgumentError("MASK_CARVE_MIN_COMPONENT_FRAC must be >= 0; got $(params.MASK_CARVE_MIN_COMPONENT_FRAC)"))
+        params.MASK_CARVE_FILL_HOLE_MAX_UM2 >= 0 ||
+            throw(ArgumentError("MASK_CARVE_FILL_HOLE_MAX_UM2 must be >= 0; got $(params.MASK_CARVE_FILL_HOLE_MAX_UM2)"))
     end
     if write_artifacts
         out_dir === nothing &&
@@ -87,9 +99,17 @@ function classify_emitters(
         "no boundary loops found at ALPHA_NM=$(params.ALPHA_NM); " *
         "check inputs or relax the alpha threshold"))
 
-    outer_polygon = loops[1]
+    v1_outer = loops[1]
+    mask_carve_diag::Union{Nothing, MaskCarveDiagnostic} = nothing
+    if params.METHOD == _METHOD_MASK_CARVE
+        carve_poly, mask_carve_diag = _build_mask_carve(v1_outer, x, y, fov_um, params)
+        outer_polygon = carve_poly
+    else
+        outer_polygon = v1_outer
+    end
 
-    # Per-emitter classification on ORIGINALS only.
+    # Per-emitter classification on ORIGINALS only — uses the EFFECTIVE
+    # outer polygon (carve for mask_carve when applied; v1 outer otherwise).
     inside_outer = falses(n)
     dist_to_outer = fill(NaN, n)
     Threads.@threads for i in 1:n
@@ -131,6 +151,7 @@ function classify_emitters(
         n, class, inside_outer, dist_to_outer,
         outer_polygon, loops, loop_diags,
         params, fov_um, sides, n_reflected, runtime_s,
+        mask_carve_diag,
     )
 
     if write_artifacts

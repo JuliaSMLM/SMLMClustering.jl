@@ -87,7 +87,13 @@ const _SCHEMA_VERSION_CLASSIFIED = 1
 const _SCHEMA_VERSION_POLYGON_LOOPS = 1
 const _SCHEMA_VERSION_LOOP_DIAGNOSTICS = 2
 const _SCHEMA_VERSION_PARAMS = 1
+# Manifest stays at v1: adding `effective_outer_tsv` and
+# `mask_carve_diagnostic_json` artifact entries is additive under the
+# existing manifest contract (consumers iterate `artifacts` keys; absence
+# / written=false signals "not produced for this method").
 const _SCHEMA_VERSION_MANIFEST = 1
+const _SCHEMA_VERSION_EFFECTIVE_OUTER = 1
+const _SCHEMA_VERSION_MASK_CARVE_DIAGNOSTIC = 1
 
 function _write_classified_tsv(path::AbstractString,
                                result::EdgeClassificationResult,
@@ -151,21 +157,74 @@ function _write_loop_diagnostics_csv(path::AbstractString,
     end
 end
 
+function _write_effective_outer_tsv(path::AbstractString,
+                                     result::EdgeClassificationResult)
+    open(path, "w") do io
+        println(io, "# schema_version: ", _SCHEMA_VERSION_EFFECTIVE_OUTER)
+        println(io, "# method: ", result.params_used.METHOD)
+        println(io, "# vertex_count: ", length(result.outer_polygon))
+        println(io, "vertex_id\tx_um\ty_um\tmethod")
+        for (vid, (vx, vy)) in enumerate(result.outer_polygon)
+            println(io, vid, "\t",
+                    round(vx; digits=6), "\t",
+                    round(vy; digits=6), "\t",
+                    result.params_used.METHOD)
+        end
+    end
+end
+
+function _write_mask_carve_diagnostic_json(path::AbstractString,
+                                            result::EdgeClassificationResult)
+    diag = result.mask_carve_diagnostic
+    payload = Dict{String,Any}(
+        "schema_version"             => _SCHEMA_VERSION_MASK_CARVE_DIAGNOSTIC,
+        "method"                     => "mask_carve",
+        "applied"                    => diag.applied,
+        "fallback_reason"            => diag.fallback_reason,
+        "params"                     => Dict{String,Any}(
+            "MASK_CARVE_SIGMA_UM"           => diag.sigma_um,
+            "MASK_CARVE_K_NOISE"            => diag.k_noise,
+            "MASK_CARVE_PIXEL_UM"           => diag.pixel_um,
+            "MASK_CARVE_MIN_COMPONENT_FRAC" => diag.min_component_frac,
+            "MASK_CARVE_FILL_HOLE_MAX_UM2"  => diag.fill_hole_max_um2,
+        ),
+        "v1_polygon_area_um2"        => diag.v1_polygon_area_um2,
+        "carve_polygon_area_um2"     => diag.carve_polygon_area_um2,
+        "area_delta_um2"             => diag.area_delta_um2,
+        "v1_only_area_um2"           => diag.v1_only_area_um2,
+        "carve_only_area_um2"        => diag.carve_only_area_um2,
+        "med_v1_carve_distance_um"   => diag.med_v1_carve_distance_um,
+        "p95_v1_carve_distance_um"   => diag.p95_v1_carve_distance_um,
+        "n_holes_filled"             => diag.n_holes_filled,
+        "n_holes_preserved"          => diag.n_holes_preserved,
+        "n_carve_polygon_pts"        => diag.n_carve_polygon_pts,
+    )
+    open(path, "w") do io
+        _json_write(io, payload; indent = 0)
+        println(io)
+    end
+end
+
 function _params_to_dict(p::EdgeClassifyParams)
     return Dict{String,Any}(
-        "K_LIST"                     => collect(Int, p.K_LIST),
-        "RHO_K_THRESH"               => p.RHO_K_THRESH,
-        "ALPHA_NM"                   => p.ALPHA_NM,
-        "REFLECT_RADIUS_NM"          => p.REFLECT_RADIUS_NM,
-        "MEMBRANE_NM"                => p.MEMBRANE_NM,
-        "FOV_TRUNC_TOL_NM"           => p.FOV_TRUNC_TOL_NM,
-        "METHOD"                     => p.METHOD,
-        "GRID_PX_NM"                 => p.GRID_PX_NM,
-        "GRID_SMOOTH_NM"             => p.GRID_SMOOTH_NM,
-        "GRID_MASK_Q"                => p.GRID_MASK_Q,
-        "GRID_MASK_PEAK_FRAC"        => p.GRID_MASK_PEAK_FRAC,
-        "GRID_OUTER_BUFFER_NM"       => p.GRID_OUTER_BUFFER_NM,
-        "CONCAVITY_METRIC_BUFFER_NM" => p.CONCAVITY_METRIC_BUFFER_NM,
+        "K_LIST"                        => collect(Int, p.K_LIST),
+        "RHO_K_THRESH"                  => p.RHO_K_THRESH,
+        "ALPHA_NM"                      => p.ALPHA_NM,
+        "REFLECT_RADIUS_NM"             => p.REFLECT_RADIUS_NM,
+        "MEMBRANE_NM"                   => p.MEMBRANE_NM,
+        "FOV_TRUNC_TOL_NM"              => p.FOV_TRUNC_TOL_NM,
+        "METHOD"                        => p.METHOD,
+        "GRID_PX_NM"                    => p.GRID_PX_NM,
+        "GRID_SMOOTH_NM"                => p.GRID_SMOOTH_NM,
+        "GRID_MASK_Q"                   => p.GRID_MASK_Q,
+        "GRID_MASK_PEAK_FRAC"           => p.GRID_MASK_PEAK_FRAC,
+        "GRID_OUTER_BUFFER_NM"          => p.GRID_OUTER_BUFFER_NM,
+        "CONCAVITY_METRIC_BUFFER_NM"    => p.CONCAVITY_METRIC_BUFFER_NM,
+        "MASK_CARVE_SIGMA_UM"           => p.MASK_CARVE_SIGMA_UM,
+        "MASK_CARVE_K_NOISE"            => p.MASK_CARVE_K_NOISE,
+        "MASK_CARVE_PIXEL_UM"           => p.MASK_CARVE_PIXEL_UM,
+        "MASK_CARVE_MIN_COMPONENT_FRAC" => p.MASK_CARVE_MIN_COMPONENT_FRAC,
+        "MASK_CARVE_FILL_HOLE_MAX_UM2"  => p.MASK_CARVE_FILL_HOLE_MAX_UM2,
     )
 end
 
@@ -221,7 +280,10 @@ function _write_manifest_json(path::AbstractString,
                               leaf_dir::AbstractString,
                               out_dir::AbstractString;
                               condition::AbstractString, cell::AbstractString,
-                              renders_written::Bool)
+                              renders_written::Bool,
+                              method::AbstractString = _METHOD_OUTER_POLYGON,
+                              mask_carve_applied::Bool = false)
+    is_mask_carve = method == _METHOD_MASK_CARVE
     artifacts = Dict{String,Any}(
         "classified_tsv"         => Dict{String,Any}("path" => "classified.tsv",
                                                        "schema_version" => _SCHEMA_VERSION_CLASSIFIED),
@@ -237,6 +299,17 @@ function _write_manifest_json(path::AbstractString,
         "loop_overlay_png"       => Dict{String,Any}("path" => "loop_overlay.png",
                                                        "written" => renders_written,
                                                        "schema_version" => nothing),
+        # mask_carve artifacts: always present in manifest; written/schema_version
+        # reflect actual emission (true only when METHOD == "mask_carve").
+        "effective_outer_tsv"          => Dict{String,Any}(
+            "path" => "effective_outer.tsv",
+            "written" => is_mask_carve,
+            "schema_version" => is_mask_carve ? _SCHEMA_VERSION_EFFECTIVE_OUTER : nothing),
+        "mask_carve_diagnostic_json"   => Dict{String,Any}(
+            "path" => "mask_carve_diagnostic.json",
+            "written" => is_mask_carve,
+            "applied" => mask_carve_applied,
+            "schema_version" => is_mask_carve ? _SCHEMA_VERSION_MASK_CARVE_DIAGNOSTIC : nothing),
     )
     payload = Dict{String,Any}(
         "schema_version" => _SCHEMA_VERSION_MANIFEST,
@@ -275,10 +348,23 @@ function _write_artifacts(leaf::AbstractString,
     _write_params_json(joinpath(leaf, "params.json"), result;
                        smld_input_meta = smld_input_meta)
 
+    is_mask_carve = result.params_used.METHOD == _METHOD_MASK_CARVE
+    mask_carve_applied = false
+    if is_mask_carve
+        _write_effective_outer_tsv(joinpath(leaf, "effective_outer.tsv"), result)
+        if result.mask_carve_diagnostic !== nothing
+            _write_mask_carve_diagnostic_json(
+                joinpath(leaf, "mask_carve_diagnostic.json"), result)
+            mask_carve_applied = result.mask_carve_diagnostic.applied
+        end
+    end
+
     out_dir = dirname(dirname(leaf))   # leaf == <out>/<cond>/<cell>
     _write_manifest_json(joinpath(leaf, "manifest.json"), leaf, out_dir;
                          condition = condition, cell = cell,
-                         renders_written = false)
+                         renders_written = false,
+                         method = result.params_used.METHOD,
+                         mask_carve_applied = mask_carve_applied)
 
     # Renders are deferred — implemented externally for now.
     # write_renders=true currently has no effect inside the package.

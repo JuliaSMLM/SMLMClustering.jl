@@ -27,12 +27,24 @@ Base.@kwdef struct EdgeClassifyParams
     # outer polygon are eligible to be flagged as "suspect" by the concavity
     # metric. Used by `compute_concavity_metric` only; does not affect class.
     CONCAVITY_METRIC_BUFFER_NM::Float64 = 2000.0
+    # mask_carve method (provisional/opt-in). Carves v1 outer polygon inward
+    # using a heterogeneity-robust density mask. Never expands v1 outward.
+    # Defaults from dev/scripts/mask_contour_v3.jl synthetic-best (no real-cell
+    # tuning). See docs/src/edge_classify_interface_v1.md for the carve-only
+    # limitation.
+    MASK_CARVE_SIGMA_UM::Float64           = 0.080
+    MASK_CARVE_K_NOISE::Float64            = 3.0
+    MASK_CARVE_PIXEL_UM::Float64           = 0.040
+    MASK_CARVE_MIN_COMPONENT_FRAC::Float64 = 0.05
+    MASK_CARVE_FILL_HOLE_MAX_UM2::Float64  = 0.5
 end
 
 const _METHOD_OUTER_POLYGON   = "outer_polygon"
 const _METHOD_CONCAVE_REFINED = "concave_refined"
 const _METHOD_GRID_HYBRID     = "grid_hybrid"
-const _VALID_METHODS = (_METHOD_OUTER_POLYGON, _METHOD_GRID_HYBRID, _METHOD_CONCAVE_REFINED)
+const _METHOD_MASK_CARVE      = "mask_carve"
+const _VALID_METHODS = (_METHOD_OUTER_POLYGON, _METHOD_GRID_HYBRID,
+                        _METHOD_CONCAVE_REFINED, _METHOD_MASK_CARVE)
 
 """
     LoopDiagnostic
@@ -85,17 +97,54 @@ struct ConcavityMetricReport
 end
 
 """
+    MaskCarveDiagnostic
+
+Per-call diagnostic for METHOD = "mask_carve". `applied = false` indicates
+the carve was attempted but fell back to v1 outer polygon (degenerate D
+mask, empty intersection, or polygonization failure); the v1 classifier
+output is preserved in that case.
+
+Areas measured by raster integration over the FOV at MASK_CARVE_PIXEL_UM
+pixel pitch. `carve_only_area_um2` should be ≈ 0 by construction (modulo
+rasterization roundoff).
+"""
+struct MaskCarveDiagnostic
+    applied::Bool
+    fallback_reason::String
+    sigma_um::Float64
+    k_noise::Float64
+    pixel_um::Float64
+    min_component_frac::Float64
+    fill_hole_max_um2::Float64
+    v1_polygon_area_um2::Float64
+    carve_polygon_area_um2::Float64
+    area_delta_um2::Float64                # carve − v1
+    v1_only_area_um2::Float64              # v1 ∧ ¬carve
+    carve_only_area_um2::Float64           # carve ∧ ¬v1 (≈0 invariant)
+    med_v1_carve_distance_um::Float64
+    p95_v1_carve_distance_um::Float64
+    n_holes_filled::Int
+    n_holes_preserved::Int
+    n_carve_polygon_pts::Int
+end
+
+"""
     EdgeClassificationResult
 
 Result of `classify_emitters`. Class labels partition the input set:
 `"outside" ∪ "membrane" ∪ "interior" == 1:n_emitters`.
+
+For `METHOD == "mask_carve"`, `outer_polygon` is the **effective**
+classification polygon (the carve), while `loops[1]` retains the
+alpha-shape outer loop as provenance. For all other methods,
+`outer_polygon == loops[1]`.
 """
 struct EdgeClassificationResult
     n_emitters::Int
     class::Vector{String}
     inside_outer::BitVector
     dist_to_outer_um::Vector{Float64}             # NaN where inside_outer == false
-    outer_polygon::Vector{NTuple{2,Float64}}      # closed-loop vertices
+    outer_polygon::Vector{NTuple{2,Float64}}      # closed-loop vertices (effective)
     loops::Vector{Vector{NTuple{2,Float64}}}      # all loops, loop_id == index
     loop_diagnostics::Vector{LoopDiagnostic}
     params_used::EdgeClassifyParams
@@ -103,4 +152,5 @@ struct EdgeClassificationResult
     truncated_sides::NamedTuple{(:L, :R, :B, :T), NTuple{4,Bool}}
     n_reflected::Int
     runtime_s::Float64
+    mask_carve_diagnostic::Union{Nothing, MaskCarveDiagnostic}
 end

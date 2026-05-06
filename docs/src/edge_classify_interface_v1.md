@@ -144,13 +144,18 @@ Asymmetry-based per-emitter gates are NOT part of v1.
 | `REFLECT_RADIUS_NM` | 1500 | nm | mirror band width inboard of truncated sides | provisional |
 | `MEMBRANE_NM` | 100 | nm | band width for membrane class around outer polygon | provisional |
 | `FOV_TRUNC_TOL_NM` | 150 | nm | truncation-detection tolerance | provisional |
-| `METHOD` | `"outer_polygon"` | enum string | classifier method selector — `"outer_polygon"` (v1 default), `"grid_hybrid"` (opt-in density-grid membrane promotion), or `"concave_refined"` (reserved, errors) | provisional |
+| `METHOD` | `"outer_polygon"` | enum string | classifier method selector — `"outer_polygon"` (v1 default), `"grid_hybrid"` (opt-in density-grid membrane promotion), `"mask_carve"` (opt-in carve-only repair; see §4g), or `"concave_refined"` (reserved, errors) | provisional |
 | `GRID_PX_NM` | 50 | nm | grid cell size for `METHOD="grid_hybrid"`; ignored by outer-only v1 | provisional |
 | `GRID_SMOOTH_NM` | 80 | nm | Gaussian smoothing σ for the density grid in `METHOD="grid_hybrid"` | provisional |
 | `GRID_MASK_Q` | 0.03 | — | lower quantile floor for nonzero smoothed grid threshold in `METHOD="grid_hybrid"` | provisional |
 | `GRID_MASK_PEAK_FRAC` | 0.26 | — | peak-relative smoothed grid threshold in `METHOD="grid_hybrid"` | provisional |
 | `GRID_OUTER_BUFFER_NM` | 800 | nm | max distance from v1 outer polygon for interior→membrane promotion in `METHOD="grid_hybrid"` | provisional |
 | `CONCAVITY_METRIC_BUFFER_NM` | 2000 | nm | buffer around the outer polygon in which `compute_concavity_metric` evaluates suspects; does not affect classification | provisional |
+| `MASK_CARVE_SIGMA_UM` | 0.080 | µm | KDE Gaussian σ for the density grid used by `METHOD="mask_carve"` | provisional |
+| `MASK_CARVE_K_NOISE` | 3.0 | — | multiplier on the Otsu-estimated noise floor; threshold = `K_NOISE × noise_floor` | provisional |
+| `MASK_CARVE_PIXEL_UM` | 0.040 | µm | grid pixel pitch for `METHOD="mask_carve"` | provisional |
+| `MASK_CARVE_MIN_COMPONENT_FRAC` | 0.05 | — | drop connected components smaller than this fraction of the largest before carving | provisional |
+| `MASK_CARVE_FILL_HOLE_MAX_UM2` | 0.5 | µm² | fill internal mask holes up to this area before carving (preserves legitimate large voids) | provisional |
 
 All parameter keys uppercase. Defaults will move as we tune; callers pinning
 a specific parameter set should record `params_used` from `params.json`
@@ -266,7 +271,7 @@ Column order is fixed: stable columns first (in the order below),
 | `frac_in_fov` | float in [0,1] | stable | fraction of vertices inside `fov_um` |
 | `frac_dense` | float in [0,1] | stable | fraction of vertices with ρ_K(K=128) ≥ `RHO_K_THRESH`, evaluated against the **originals-only** KDTree |
 | `median_rhoK` | float | stable | median ρ_K(K=128) across loop vertices (originals KDTree) |
-| `used_in_outer` | bool | stable (added in schema 2) | true iff this loop participates in the `inside_outer` decision. v1 outer-polygon: only `loop_id == 1`. Future methods may promote auxiliary loops. |
+| `used_in_outer` | bool | stable (added in schema 2) | true iff this loop participates in the `inside_outer` decision. v1 outer-polygon and `grid_hybrid`: only `loop_id == 1`. For `METHOD == "mask_carve"`, `loop_id == 1` is still marked `used_in_outer = true` because the alpha outer is the **source envelope** for the carve — but the EFFECTIVE classification boundary is the carve polygon recorded in `effective_outer.tsv`, not `loop_id == 1` of `polygon_loops.tsv`. Future methods may promote auxiliary loops. |
 | `heuristic_type` | enum string | name & presence stable; values & thresholds PROVISIONAL | human-diagnostic loop label (see below) |
 
 The `manifest.json` `artifacts.loop_diagnostics_csv.schema_version` is
@@ -343,14 +348,21 @@ Single index point. Consumers read this first.
     "loop_diagnostics_csv": {"path": "loop_diagnostics.csv", "schema_version": 2},
     "params_json":        {"path": "params.json",        "schema_version": 1},
     "classified_png":     {"path": "classified.png",     "written": false, "schema_version": null},
-    "loop_overlay_png":   {"path": "loop_overlay.png",   "written": false, "schema_version": null}
+    "loop_overlay_png":   {"path": "loop_overlay.png",   "written": false, "schema_version": null},
+    "effective_outer_tsv":         {"path": "effective_outer.tsv",         "written": false, "schema_version": null},
+    "mask_carve_diagnostic_json":  {"path": "mask_carve_diagnostic.json",  "written": false, "applied": false, "schema_version": null}
   },
   "timestamp_utc": "2026-05-04T20:43:11Z"
 }
 ```
 
 Paths in `artifacts.*.path` are relative to `leaf_dir`. PNG entries always
-appear; `written` is `false` when `--renders` was not passed.
+appear; `written` is `false` when `--renders` was not passed. The
+`effective_outer_tsv` and `mask_carve_diagnostic_json` entries always
+appear (additive under manifest schema 1); `written = true` /
+`schema_version = 1` only when `METHOD == "mask_carve"`. The
+`applied` field on `mask_carve_diagnostic_json` mirrors the diagnostic's
+own `applied` flag (`false` when carve fell back to v1).
 
 ### 4f. Renders — DIAGNOSTIC / PROVISIONAL
 
@@ -358,6 +370,66 @@ appear; `written` is `false` when `--renders` was not passed.
 colored by `frac_dense`) are diagnostic outputs only. Visual styling, marker
 sizes, colors, axis presence are **not** part of any contract. @genmab
 should consume the TSV/CSV/JSON artifacts, not the PNGs.
+
+### 4g. `mask_carve` artifacts — PROVISIONAL / OPT-IN
+
+These artifacts are emitted **only** when `METHOD == "mask_carve"`. The
+`manifest.json` lists both entries unconditionally with `written` and
+`schema_version`; for non-`mask_carve` methods `written = false` and
+`schema_version = null`.
+
+**`effective_outer.tsv`** (schema_version 1) — the polygon actually used
+for `inside_outer` / `dist_to_outer` decisions. For `mask_carve` this is
+the carved boundary, which differs from `polygon_loops.tsv` `loop_id == 1`
+(that file always records the alpha-shape outer for provenance).
+
+```
+# schema_version: 1
+# method: mask_carve
+# vertex_count: <n>
+vertex_id  x_um  y_um  method
+1          1.234 5.678 mask_carve
+…
+```
+
+**`mask_carve_diagnostic.json`** (schema_version 1) — per-call carve
+diagnostic. `applied = false` indicates the carve was attempted but fell
+back to the v1 alpha outer (degenerate density grid, empty intersection,
+or polygonization failure); `fallback_reason` carries a human-readable
+tag. Areas come from raster integration over the FOV at
+`MASK_CARVE_PIXEL_UM` pitch. `carve_only_area_um2 ≈ 0` is an invariant
+(carve ⊆ v1 by construction; small values are rasterization roundoff).
+
+```json
+{
+  "schema_version": 1,
+  "method": "mask_carve",
+  "applied": true,
+  "fallback_reason": "",
+  "params": { "MASK_CARVE_SIGMA_UM": 0.08, "MASK_CARVE_K_NOISE": 3.0,
+              "MASK_CARVE_PIXEL_UM": 0.04,
+              "MASK_CARVE_MIN_COMPONENT_FRAC": 0.05,
+              "MASK_CARVE_FILL_HOLE_MAX_UM2": 0.5 },
+  "v1_polygon_area_um2": 250.5,
+  "carve_polygon_area_um2": 244.8,
+  "area_delta_um2": -5.7,
+  "v1_only_area_um2": 5.7,
+  "carve_only_area_um2": 0.0,
+  "med_v1_carve_distance_um": 1.21,
+  "p95_v1_carve_distance_um": 1.71,
+  "n_holes_filled": 12,
+  "n_holes_preserved": 0,
+  "n_carve_polygon_pts": 2345
+}
+```
+
+**Carve-only limitation.** `mask_carve` only carves the v1 outer polygon
+inward; it cannot recover membrane that lies outside v1. Regions where
+v1 already underestimates the cell are unchanged. Provisional / opt-in
+on this branch — defaults are taken from synthetic stop-condition gates
+in `dev/scripts/mask_contour_v3.jl` and `mask_contour_v31.jl` (no
+real-cell tuning); behavior on real cells is documented in the v3.1 dev
+report.
 
 ---
 
@@ -372,6 +444,13 @@ should consume the TSV/CSV/JSON artifacts, not the PNGs.
   `GRID_OUTER_BUFFER_NM` of the v1 outer polygon. It never demotes
   `membrane`, never changes `outside`, and does not use diagnostic
   interior loops for class decisions.
+- `METHOD="mask_carve"` replaces the **effective** outer polygon used for
+  `inside_outer` / `dist_to_outer` with a carved subset of v1 (alpha
+  outer remains in `loops[1]` and `polygon_loops.tsv` for provenance).
+  Carve ⊆ v1 by construction. May reclassify v1 `interior` / `membrane`
+  emitters in carved-away regions to `outside`, and may demote
+  `membrane` to `interior` near a carve boundary; never adds emitters
+  outside v1 to the cell.
 
 ---
 

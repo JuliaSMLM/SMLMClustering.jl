@@ -36,11 +36,13 @@ using Dates
 
 export classify_emitters,
        EdgeClassifyParams, EdgeClassificationResult, LoopDiagnostic,
+       MaskCarveDiagnostic,
        compute_concavity_metric, ConcavityMetricReport
 
 include("types.jl")
 include("geometry.jl")
 include("grid_hybrid.jl")
+include("mask_carve.jl")
 include("diagnostics.jl")
 include("io.jl")
 include("classify.jl")

@@ -50,7 +50,10 @@ function _load_params_toml(path::AbstractString)
                  "MEMBRANE_NM","FOV_TRUNC_TOL_NM",
                  "METHOD","GRID_PX_NM","GRID_SMOOTH_NM","GRID_MASK_Q",
                  "GRID_MASK_PEAK_FRAC","GRID_OUTER_BUFFER_NM",
-                 "CONCAVITY_METRIC_BUFFER_NM"])
+                 "CONCAVITY_METRIC_BUFFER_NM",
+                 "MASK_CARVE_SIGMA_UM","MASK_CARVE_K_NOISE",
+                 "MASK_CARVE_PIXEL_UM","MASK_CARVE_MIN_COMPONENT_FRAC",
+                 "MASK_CARVE_FILL_HOLE_MAX_UM2"])
     unknown = setdiff(keys(raw), known)
     isempty(unknown) || error("unknown params keys: $(collect(unknown))")
     kw = Dict{Symbol,Any}()
@@ -70,6 +73,16 @@ function _load_params_toml(path::AbstractString)
         (kw[:GRID_OUTER_BUFFER_NM] = Float64(raw["GRID_OUTER_BUFFER_NM"]))
     haskey(raw, "CONCAVITY_METRIC_BUFFER_NM") &&
         (kw[:CONCAVITY_METRIC_BUFFER_NM] = Float64(raw["CONCAVITY_METRIC_BUFFER_NM"]))
+    haskey(raw, "MASK_CARVE_SIGMA_UM") &&
+        (kw[:MASK_CARVE_SIGMA_UM] = Float64(raw["MASK_CARVE_SIGMA_UM"]))
+    haskey(raw, "MASK_CARVE_K_NOISE") &&
+        (kw[:MASK_CARVE_K_NOISE] = Float64(raw["MASK_CARVE_K_NOISE"]))
+    haskey(raw, "MASK_CARVE_PIXEL_UM") &&
+        (kw[:MASK_CARVE_PIXEL_UM] = Float64(raw["MASK_CARVE_PIXEL_UM"]))
+    haskey(raw, "MASK_CARVE_MIN_COMPONENT_FRAC") &&
+        (kw[:MASK_CARVE_MIN_COMPONENT_FRAC] = Float64(raw["MASK_CARVE_MIN_COMPONENT_FRAC"]))
+    haskey(raw, "MASK_CARVE_FILL_HOLE_MAX_UM2") &&
+        (kw[:MASK_CARVE_FILL_HOLE_MAX_UM2] = Float64(raw["MASK_CARVE_FILL_HOLE_MAX_UM2"]))
     return EdgeClassifyParams(; kw...)
 end
 
