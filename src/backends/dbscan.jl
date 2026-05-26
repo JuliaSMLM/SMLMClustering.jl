@@ -76,14 +76,29 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
             min_cluster_size = cfg.min_points,
         )
 
-        # res.assignments has one entry per column of X, in the order of `idxs`.
-        # Labels are 0 (noise) or 1..K within this group; we write them directly
-        # to emitter.id, so per-dataset label namespaces stay local per V3.
-        @inbounds for (j, i) in pairs(idxs)
-            smld.emitters[i].id = res.assignments[j]
+        # Recount cluster sizes from `res.assignments` (the per-point labels),
+        # NOT from `res.counts`. Clustering.jl counts a boundary point that
+        # touches two clusters in *both* clusters' `counts`, so `sum(res.counts)`
+        # can exceed the point count — yielding inflated cluster sizes and even a
+        # negative n_noise. `assignments` is last-writer-wins and assigns each
+        # point exactly once, so it is the source of truth.
+        group_sizes = zeros(Int, length(res.counts))
+        @inbounds for a in res.assignments
+            a == 0 && continue
+            group_sizes[a] += 1
         end
-        append!(cluster_sizes, res.counts)
-        n_clustered += sum(res.counts)
+        # Compact-relabel within this group: drop clusters whose *final* (post
+        # last-writer-wins) size is below min_points, renumber the survivors
+        # 1..k_local, and push their sizes onto cluster_sizes. This keeps the
+        # labels written to emitter.id contiguous and consistent with the
+        # reported sizes (a cluster can lose all/most of its points to a
+        # neighbor during reassignment). label_map is local per V3.
+        label_map, added = _compact_relabel!(cluster_sizes, group_sizes, cfg.min_points)
+        @inbounds for (j, i) in pairs(idxs)
+            a = res.assignments[j]
+            smld.emitters[i].id = a == 0 ? 0 : label_map[a]
+        end
+        n_clustered += added
     end
 
     n_clusters = length(cluster_sizes)
