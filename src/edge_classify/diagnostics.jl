@@ -22,7 +22,7 @@ function _compute_loop_diagnostics(
     x_um::Vector{Float64}, y_um::Vector{Float64},
     Xorig::Matrix{Float64},
     fov_um::NTuple{4,Float64},
-    params::EdgeClassifyParams,
+    params::EdgeClassifyConfig,
 )
     fxmin, fxmax, fymin, fymax = fov_um
     n_orig = length(x_um)

@@ -341,7 +341,7 @@ caller can use the result without re-checking.
 function _build_mask_carve(v1_polygon::AbstractVector{<:NTuple{2,Float64}},
                             x_um::Vector{Float64}, y_um::Vector{Float64},
                             fov_um::NTuple{4,Float64},
-                            params::EdgeClassifyParams)
+                            params::EdgeClassifyConfig)
     σ      = params.MASK_CARVE_SIGMA_UM
     knoise = params.MASK_CARVE_K_NOISE
     pixel  = params.MASK_CARVE_PIXEL_UM

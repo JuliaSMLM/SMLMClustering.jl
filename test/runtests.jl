@@ -54,6 +54,7 @@ struct _DummyClusterCfg <: AbstractClusterConfig end
     include("test_point_hysteresis.jl")
     include("test_edge_classify.jl")
     include("test_edge_classify_mask_carve.jl")
+    include("test_edge_classify_kde_valley.jl")
 
 end
 

@@ -47,12 +47,14 @@ include("backends/point_hysteresis.jl")
 
 include("edge_classify/EdgeClassify.jl")
 using .EdgeClassify: classify_emitters,
-                     EdgeClassifyParams, EdgeClassificationResult, LoopDiagnostic,
-                     MaskCarveDiagnostic,
+                     EdgeClassifyConfig, EdgeClassifyParams,
+                     EdgeClassificationResult, LoopDiagnostic,
+                     MaskCarveDiagnostic, kde_valley_params,
                      compute_concavity_metric, ConcavityMetricReport
 export classify_emitters,
-       EdgeClassifyParams, EdgeClassificationResult, LoopDiagnostic,
-       MaskCarveDiagnostic,
+       EdgeClassifyConfig, EdgeClassifyParams,
+       EdgeClassificationResult, LoopDiagnostic,
+       MaskCarveDiagnostic, kde_valley_params,
        compute_concavity_metric, ConcavityMetricReport
 
 end

@@ -1,12 +1,12 @@
 """
-    EdgeClassifyParams
+    EdgeClassifyConfig
 
 Parameters for the v1 outer-polygon edge/membrane/interior classifier.
 All keys uppercase to match the documented `params.toml` / `params.json`
 convention. Defaults are provisional and may move; callers pinning a
 specific set should record `params_used` from the result.
 """
-Base.@kwdef struct EdgeClassifyParams
+Base.@kwdef struct EdgeClassifyConfig
     K_LIST::Vector{Int}            = [16, 128]
     RHO_K_THRESH::Float64          = 200.0
     ALPHA_NM::Float64              = 300.0
@@ -37,14 +37,38 @@ Base.@kwdef struct EdgeClassifyParams
     MASK_CARVE_PIXEL_UM::Float64           = 0.040
     MASK_CARVE_MIN_COMPONENT_FRAC::Float64 = 0.05
     MASK_CARVE_FILL_HOLE_MAX_UM2::Float64  = 0.5
+    # kde_valley method (VALIDATED genmab dSTORM production: Gaussian-KDE density
+    # + background/cell valley threshold + footprint fill + ray-cast enclosure
+    # reclass). Defaults reproduce the A431 dSTORM validated set (commit 45b0690).
+    # NOTE: the validated kde_valley ALPHA_NM is 600, not the v1 default 300 —
+    # use the `kde_valley_params()` factory for one-line foolproof adoption. The
+    # struct default stays "outer_polygon"/300 so v1 callers are byte-identical.
+    # dSTORM path only; DNA-PAINT uses outer_polygon + a per-FOV density quantile.
+    KDE_SIGMA_NM::Float64          = 150.0
+    KDE_RMAX_SIGMA::Float64        = 3.0
+    KDE_VALLEY_NBINS::Int          = 140
+    KDE_VALLEY_FLOORFRAC::Float64  = 0.05
+    KDE_VALLEY_SMOOTH::Int         = 4
+    FOOTPRINT_BIN_UM::Float64      = 0.2
+    FOOTPRINT_CLOSING_PX::Int      = 3
+    ENCLOSURE_BIN_UM::Float64      = 0.2
+    ENCLOSURE_MIN_HITS::Int        = 6
 end
+
+# DEPRECATED alias (renamed `EdgeClassifyParams` -> `EdgeClassifyConfig` in 0.4.0
+# to match the ecosystem `<X>Config` convention, e.g. DBSCANConfig). Kept through
+# the 0.4.x line so existing call sites keep working verbatim; slated for removal
+# in 0.5.0. Same type, so already-serialized objects still load.
+const EdgeClassifyParams = EdgeClassifyConfig
 
 const _METHOD_OUTER_POLYGON   = "outer_polygon"
 const _METHOD_CONCAVE_REFINED = "concave_refined"
 const _METHOD_GRID_HYBRID     = "grid_hybrid"
 const _METHOD_MASK_CARVE      = "mask_carve"
+const _METHOD_KDE_VALLEY      = "kde_valley"
 const _VALID_METHODS = (_METHOD_OUTER_POLYGON, _METHOD_GRID_HYBRID,
-                        _METHOD_CONCAVE_REFINED, _METHOD_MASK_CARVE)
+                        _METHOD_CONCAVE_REFINED, _METHOD_MASK_CARVE,
+                        _METHOD_KDE_VALLEY)
 
 """
     LoopDiagnostic
@@ -138,16 +162,29 @@ For `METHOD == "mask_carve"`, `outer_polygon` is the **effective**
 classification polygon (the carve), while `loops[1]` retains the
 alpha-shape outer loop as provenance. For all other methods,
 `outer_polygon == loops[1]`.
+
+`class` is the authoritative per-emitter answer. Two membership fields:
+- `inside_outer` — strictly **geometric** containment inside the alpha outer
+  loop. `dist_to_outer_um` is the distance to that boundary (`NaN` when
+  `inside_outer == false`).
+- `in_cell` — **topological** cell membership, `== (class != "outside")`. For
+  v1 / `grid_hybrid` / `mask_carve` this equals `inside_outer`. For
+  `METHOD == "kde_valley"` the enclosure stage folds background points enclosed
+  by the cell into `class == "interior"` while leaving `inside_outer` geometric,
+  so `in_cell ⊇ inside_outer` and the enclosure-recovered set is exactly
+  `class == "interior" && inside_outer == false` (those have `dist_to_outer_um
+  == NaN`). Downstream interior filters should read `class`, not `inside_outer`.
 """
 struct EdgeClassificationResult
     n_emitters::Int
     class::Vector{String}
     inside_outer::BitVector
+    in_cell::BitVector                            # class != "outside" (topological membership)
     dist_to_outer_um::Vector{Float64}             # NaN where inside_outer == false
     outer_polygon::Vector{NTuple{2,Float64}}      # closed-loop vertices (effective)
     loops::Vector{Vector{NTuple{2,Float64}}}      # all loops, loop_id == index
     loop_diagnostics::Vector{LoopDiagnostic}
-    params_used::EdgeClassifyParams
+    params_used::EdgeClassifyConfig
     fov_um::NTuple{4,Float64}
     truncated_sides::NamedTuple{(:L, :R, :B, :T), NTuple{4,Bool}}
     n_reflected::Int

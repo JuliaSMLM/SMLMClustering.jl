@@ -83,7 +83,10 @@ end
 
 # ---------- artifact writers --------------------------------------------------
 
-const _SCHEMA_VERSION_CLASSIFIED = 1
+# schema_version 2 adds the `in_cell` column (topological cell membership;
+# differs from `inside_outer` only for METHOD="kde_valley" where enclosure folds
+# background into class=="interior" — see EdgeClassificationResult).
+const _SCHEMA_VERSION_CLASSIFIED = 2
 const _SCHEMA_VERSION_POLYGON_LOOPS = 1
 const _SCHEMA_VERSION_LOOP_DIAGNOSTICS = 2
 const _SCHEMA_VERSION_PARAMS = 1
@@ -106,7 +109,7 @@ function _write_classified_tsv(path::AbstractString,
         println(io, "# cell: ", cell)
         println(io, "# n_emitters: ", result.n_emitters)
         println(io, "# coord_units: um")
-        println(io, "emitter_id\tx_um\ty_um\tclass\tinside_outer\tdist_to_outer_um")
+        println(io, "emitter_id\tx_um\ty_um\tclass\tinside_outer\tin_cell\tdist_to_outer_um")
         for i in 1:result.n_emitters
             d = result.dist_to_outer_um[i]
             d_str = isnan(d) ? "NaN" : string(round(d; digits=6))
@@ -115,6 +118,7 @@ function _write_classified_tsv(path::AbstractString,
                     round(y_um[i]; digits=6), "\t",
                     result.class[i], "\t",
                     Int(result.inside_outer[i]), "\t",
+                    Int(result.in_cell[i]), "\t",
                     d_str)
         end
     end
@@ -205,7 +209,7 @@ function _write_mask_carve_diagnostic_json(path::AbstractString,
     end
 end
 
-function _params_to_dict(p::EdgeClassifyParams)
+function _params_to_dict(p::EdgeClassifyConfig)
     return Dict{String,Any}(
         "K_LIST"                        => collect(Int, p.K_LIST),
         "RHO_K_THRESH"                  => p.RHO_K_THRESH,
@@ -225,6 +229,15 @@ function _params_to_dict(p::EdgeClassifyParams)
         "MASK_CARVE_PIXEL_UM"           => p.MASK_CARVE_PIXEL_UM,
         "MASK_CARVE_MIN_COMPONENT_FRAC" => p.MASK_CARVE_MIN_COMPONENT_FRAC,
         "MASK_CARVE_FILL_HOLE_MAX_UM2"  => p.MASK_CARVE_FILL_HOLE_MAX_UM2,
+        "KDE_SIGMA_NM"                  => p.KDE_SIGMA_NM,
+        "KDE_RMAX_SIGMA"                => p.KDE_RMAX_SIGMA,
+        "KDE_VALLEY_NBINS"              => p.KDE_VALLEY_NBINS,
+        "KDE_VALLEY_FLOORFRAC"          => p.KDE_VALLEY_FLOORFRAC,
+        "KDE_VALLEY_SMOOTH"             => p.KDE_VALLEY_SMOOTH,
+        "FOOTPRINT_BIN_UM"              => p.FOOTPRINT_BIN_UM,
+        "FOOTPRINT_CLOSING_PX"          => p.FOOTPRINT_CLOSING_PX,
+        "ENCLOSURE_BIN_UM"              => p.ENCLOSURE_BIN_UM,
+        "ENCLOSURE_MIN_HITS"            => p.ENCLOSURE_MIN_HITS,
     )
 end
 

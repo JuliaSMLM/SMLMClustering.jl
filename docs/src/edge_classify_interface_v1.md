@@ -144,7 +144,7 @@ Asymmetry-based per-emitter gates are NOT part of v1.
 | `REFLECT_RADIUS_NM` | 1500 | nm | mirror band width inboard of truncated sides | provisional |
 | `MEMBRANE_NM` | 100 | nm | band width for membrane class around outer polygon | provisional |
 | `FOV_TRUNC_TOL_NM` | 150 | nm | truncation-detection tolerance | provisional |
-| `METHOD` | `"outer_polygon"` | enum string | classifier method selector — `"outer_polygon"` (v1 default), `"grid_hybrid"` (opt-in density-grid membrane promotion), `"mask_carve"` (opt-in carve-only repair; see §4g), or `"concave_refined"` (reserved, errors) | provisional |
+| `METHOD` | `"outer_polygon"` | enum string | classifier method selector — `"outer_polygon"` (v1 default), `"grid_hybrid"` (opt-in density-grid membrane promotion), `"mask_carve"` (opt-in carve-only repair; see §4g), `"kde_valley"` (validated adaptive KDE gate; use the `kde_valley_params()` factory), or `"concave_refined"` (reserved, errors) | provisional |
 | `GRID_PX_NM` | 50 | nm | grid cell size for `METHOD="grid_hybrid"`; ignored by outer-only v1 | provisional |
 | `GRID_SMOOTH_NM` | 80 | nm | Gaussian smoothing σ for the density grid in `METHOD="grid_hybrid"` | provisional |
 | `GRID_MASK_Q` | 0.03 | — | lower quantile floor for nonzero smoothed grid threshold in `METHOD="grid_hybrid"` | provisional |
@@ -156,6 +156,15 @@ Asymmetry-based per-emitter gates are NOT part of v1.
 | `MASK_CARVE_PIXEL_UM` | 0.040 | µm | grid pixel pitch for `METHOD="mask_carve"` | provisional |
 | `MASK_CARVE_MIN_COMPONENT_FRAC` | 0.05 | — | drop connected components smaller than this fraction of the largest before carving | provisional |
 | `MASK_CARVE_FILL_HOLE_MAX_UM2` | 0.5 | µm² | fill internal mask holes up to this area before carving (preserves legitimate large voids) | provisional |
+| `KDE_SIGMA_NM` | 150 | nm | Gaussian-KDE bandwidth σ for `METHOD="kde_valley"` (validated A431 dSTORM value) | validated |
+| `KDE_RMAX_SIGMA` | 3.0 | — | KDE range-query cutoff in units of σ | validated |
+| `KDE_VALLEY_NBINS` | 140 | — | log-density histogram bins for the valley threshold | validated |
+| `KDE_VALLEY_FLOORFRAC` | 0.05 | — | left-base cutoff as a fraction of the cell-mode peak | validated |
+| `KDE_VALLEY_SMOOTH` | 4 | bins | ±window for histogram smoothing before valley search | validated |
+| `FOOTPRINT_BIN_UM` | 0.2 | µm | raster bin for the footprint fill (`METHOD="kde_valley"`) | validated |
+| `FOOTPRINT_CLOSING_PX` | 3 | px | morphological closing radius to seal thin necks before hole-fill | validated |
+| `ENCLOSURE_BIN_UM` | 0.2 | µm | raster bin for the 8-ray enclosure reclass | validated |
+| `ENCLOSURE_MIN_HITS` | 6 | of 8 | min rays hitting cell tissue to fold a background point into `interior` | validated |
 
 All parameter keys uppercase. Defaults will move as we tune; callers pinning
 a specific parameter set should record `params_used` from `params.json`
@@ -193,13 +202,13 @@ paths and schema versions, never the directory listing.
 Per-emitter classification. One row per original emitter in input order.
 
 ```
-# schema_version: 1
+# schema_version: 2
 # condition: RGY
 # cell: cell_01
 # n_emitters: 290500
 # coord_units: um
-emitter_id  x_um       y_um       class      inside_outer  dist_to_outer_um
-1           4.13027    8.91204    interior   1             0.412
+emitter_id  x_um       y_um       class      inside_outer  in_cell  dist_to_outer_um
+1           4.13027    8.91204    interior   1             1        0.412
 ...
 ```
 
@@ -208,7 +217,8 @@ emitter_id  x_um       y_um       class      inside_outer  dist_to_outer_um
 | `emitter_id` | int (1-based) | row index — `emitter_id == i` joins back to `smld.emitters[i]` |
 | `x_um`, `y_um` | float | echoed for joinability |
 | `class` | enum string | one of `outside`, `membrane`, `interior` |
-| `inside_outer` | 0/1 | inside `loop_id == 1` (outer) polygon |
+| `inside_outer` | 0/1 | **geometric** containment inside `loop_id == 1` (outer) polygon |
+| `in_cell` | 0/1 | **topological** cell membership, `== (class != "outside")` (added in schema_version 2). Equals `inside_outer` for every method except `METHOD="kde_valley"`, where the enclosure stage folds enclosed background into `interior` |
 | `dist_to_outer_um` | float | min perpendicular distance to outer polygon edges; `NaN` if `inside_outer == 0` |
 
 **v1 class semantics (outer-only decision)**:
@@ -219,6 +229,15 @@ emitter_id  x_um       y_um       class      inside_outer  dist_to_outer_um
 
 Interior loops (`loop_id >= 2`) do **not** affect the class column in v1.
 Whether they should is a v2 decision (open question in §8).
+
+**`METHOD="kde_valley"` relaxes these biconditionals** — `class` is authoritative.
+The enclosure stage reclassifies background points enclosed by the cell to
+`interior` while leaving `inside_outer`/`dist_to_outer_um` strictly geometric, so
+`interior ⊇ {inside_outer == 1 AND dist >= MEMBRANE}` and the enclosure-recovered
+set is exactly `class == "interior" AND inside_outer == 0` (those have
+`dist_to_outer_um == NaN`). `membrane` stays the band around the geometric outer
+polygon only. Downstream interior filters should read `class` (or `in_cell` for
+membership), never `inside_outer`.
 
 Class invariants:
 
@@ -451,6 +470,18 @@ report.
   emitters in carved-away regions to `outside`, and may demote
   `membrane` to `interior` near a carve boundary; never adds emitters
   outside v1 to the cell.
+- `METHOD="kde_valley"` (validated genmab dSTORM gate) replaces the **density
+  gate** upstream of the polygon: a continuous Gaussian-KDE density is thresholded
+  at the background/cell valley (per-FOV adaptive — handles the ~6× MAP-N density
+  spread with no per-cell tuning), footprint-filled, then the v1 outer-polygon
+  geometry runs on the footprint subset, and an enclosure pass folds background
+  points enclosed by the cell into `interior`. `class` is authoritative and
+  includes the enclosure-recovered interiors; `inside_outer`/`dist_to_outer_um`
+  stay strictly geometric (the enclosure-recovered set is `class == "interior" AND
+  inside_outer == 0`); `in_cell == (class != "outside")` carries topological
+  membership. Use the `kde_valley_params()` factory (validated defaults σ=150 nm,
+  α=600 nm, reflect=1500 nm, membrane=100 nm) — the struct default `ALPHA_NM` is
+  300, so a raw constructor would under-alpha. dSTORM (A431/HeLa) path only.
 
 ---
 

@@ -20,7 +20,7 @@ Interior loops (`loop_id >= 2`) are diagnostic only in v1.
 
 - [`classify_emitters`](@ref) — coordinate-based core function and SMLD
   adapter.
-- [`EdgeClassifyParams`](@ref) — parameter struct (defaults provisional).
+- [`EdgeClassifyConfig`](@ref) — parameter struct (defaults provisional).
 - [`EdgeClassificationResult`](@ref) — result type.
 - [`LoopDiagnostic`](@ref) — per-loop diagnostic record.
 
@@ -35,14 +35,16 @@ using Statistics
 using Dates
 
 export classify_emitters,
-       EdgeClassifyParams, EdgeClassificationResult, LoopDiagnostic,
-       MaskCarveDiagnostic,
+       EdgeClassifyConfig, EdgeClassifyParams,
+       EdgeClassificationResult, LoopDiagnostic,
+       MaskCarveDiagnostic, kde_valley_params,
        compute_concavity_metric, ConcavityMetricReport
 
 include("types.jl")
 include("geometry.jl")
 include("grid_hybrid.jl")
 include("mask_carve.jl")
+include("kde_valley.jl")
 include("diagnostics.jl")
 include("io.jl")
 include("classify.jl")

@@ -1,5 +1,5 @@
 """
-    classify_emitters(x_um, y_um; fov_um, params=EdgeClassifyParams(),
+    classify_emitters(x_um, y_um; fov_um, params=EdgeClassifyConfig(),
                       out_dir=nothing, condition=nothing, cell=nothing,
                       write_artifacts=false, write_renders=false)
         -> EdgeClassificationResult
@@ -17,7 +17,7 @@ plus a `MEMBRANE_NM` band around the boundary).
   `ymin < ymax`.
 
 # Keyword arguments
-- `params::EdgeClassifyParams`: pipeline parameters.
+- `params::EdgeClassifyConfig`: pipeline parameters.
 - `out_dir, condition, cell`: required when `write_artifacts=true`. Output
   goes to `<out_dir>/<condition>/<cell>/`.
 - `write_artifacts::Bool`: emit `classified.tsv`, `polygon_loops.tsv`,
@@ -32,7 +32,7 @@ function classify_emitters(
     x_um::AbstractVector{<:Real},
     y_um::AbstractVector{<:Real};
     fov_um::NTuple{4,Float64},
-    params::EdgeClassifyParams = EdgeClassifyParams(),
+    params::EdgeClassifyConfig = EdgeClassifyConfig(),
     out_dir::Union{Nothing,AbstractString} = nothing,
     condition::Union{Nothing,AbstractString} = nothing,
     cell::Union{Nothing,AbstractString} = nothing,
@@ -66,6 +66,20 @@ function classify_emitters(
         params.MASK_CARVE_FILL_HOLE_MAX_UM2 >= 0 ||
             throw(ArgumentError("MASK_CARVE_FILL_HOLE_MAX_UM2 must be >= 0; got $(params.MASK_CARVE_FILL_HOLE_MAX_UM2)"))
     end
+    if params.METHOD == _METHOD_KDE_VALLEY
+        params.KDE_SIGMA_NM > 0 ||
+            throw(ArgumentError("KDE_SIGMA_NM must be positive; got $(params.KDE_SIGMA_NM)"))
+        params.KDE_RMAX_SIGMA > 0 ||
+            throw(ArgumentError("KDE_RMAX_SIGMA must be positive; got $(params.KDE_RMAX_SIGMA)"))
+        params.KDE_VALLEY_NBINS > 1 ||
+            throw(ArgumentError("KDE_VALLEY_NBINS must be > 1; got $(params.KDE_VALLEY_NBINS)"))
+        params.FOOTPRINT_BIN_UM > 0 ||
+            throw(ArgumentError("FOOTPRINT_BIN_UM must be positive; got $(params.FOOTPRINT_BIN_UM)"))
+        params.ENCLOSURE_BIN_UM > 0 ||
+            throw(ArgumentError("ENCLOSURE_BIN_UM must be positive; got $(params.ENCLOSURE_BIN_UM)"))
+        (1 <= params.ENCLOSURE_MIN_HITS <= 8) ||
+            throw(ArgumentError("ENCLOSURE_MIN_HITS must be in 1:8; got $(params.ENCLOSURE_MIN_HITS)"))
+    end
     if write_artifacts
         out_dir === nothing &&
             throw(ArgumentError("write_artifacts=true requires out_dir"))
@@ -78,6 +92,18 @@ function classify_emitters(
     t0 = time()
     x = collect(Float64, x_um); y = collect(Float64, y_um)
     n = length(x)
+
+    # kde_valley: validated adaptive gate. Gates on the ORIGINAL cloud
+    # (KDE-valley + footprint) then runs the v1 outer-polygon geometry on the
+    # footprint subset and folds enclosure-recovered interior. Distinct enough
+    # from the v1 reflect-then-gate flow to live in its own path.
+    if params.METHOD == _METHOD_KDE_VALLEY
+        return _classify_kde_valley(x, y, fov_um, params, t0;
+                                    out_dir = out_dir, condition = condition,
+                                    cell = cell, write_artifacts = write_artifacts,
+                                    write_renders = write_renders,
+                                    smld_input_meta = smld_input_meta)
+    end
 
     # FOV truncation detection + reflection.
     sides = _truncated_sides(x, y, fov_um, params.FOV_TRUNC_TOL_NM / 1000)
@@ -147,8 +173,9 @@ function classify_emitters(
     loop_diags = _compute_loop_diagnostics(loops, x, y, Xorig, fov_um, params)
 
     runtime_s = time() - t0
+    in_cell = .!(class .== "outside")
     result = EdgeClassificationResult(
-        n, class, inside_outer, dist_to_outer,
+        n, class, inside_outer, in_cell, dist_to_outer,
         outer_polygon, loops, loop_diags,
         params, fov_um, sides, n_reflected, runtime_s,
         mask_carve_diag,

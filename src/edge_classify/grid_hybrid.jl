@@ -144,7 +144,7 @@ function _boundary_cells(mask::BitMatrix)
 end
 
 function _grid_boundary_membrane_mask(x, y, fov::NTuple{4,Float64},
-                                      params::EdgeClassifyParams)
+                                      params::EdgeClassifyConfig)
     px_um = params.GRID_PX_NM / 1000
     smooth_um = params.GRID_SMOOTH_NM / 1000
     membrane_um = params.MEMBRANE_NM / 1000
@@ -180,7 +180,7 @@ end
 function _apply_grid_hybrid!(class::Vector{String}, x, y,
                              dist_to_outer::Vector{Float64},
                              fov::NTuple{4,Float64},
-                             params::EdgeClassifyParams)
+                             params::EdgeClassifyConfig)
     grid_membrane = _grid_boundary_membrane_mask(x, y, fov, params)
     max_outer_dist_um = params.GRID_OUTER_BUFFER_NM / 1000
     @inbounds for i in eachindex(class)
