@@ -1,195 +1,178 @@
 """
-    classify_emitters(x_um, y_um; fov_um, params=EdgeClassifyConfig(),
-                      out_dir=nothing, condition=nothing, cell=nothing,
-                      write_artifacts=false, write_renders=false)
-        -> EdgeClassificationResult
+    classify_emitters(smld::BasicSMLD, cfg::AbstractEdgeClassifyConfig) -> (smld, info)
+    classify_emitters(x_um, y_um, cfg::AbstractEdgeClassifyConfig; fov_um) -> info
 
-Classify each (x_um, y_um) emitter as `"outside"`, `"membrane"`, or
-`"interior"` using the v1 outer-polygon decision (point-in-polygon vs the
-alpha-shape outer boundary on the FOV-augmented multi-K-density-gated set,
-plus a `MEMBRANE_NM` band around the boundary).
+Classify each emitter as `:outside`, `:membrane`, or `:interior`. The concrete
+config type selects the strategy by dispatch (`OuterPolygonConfig`,
+`GridHybridConfig`, `MaskCarveConfig`, `KdeValleyConfig`).
 
-# Required arguments
-- `x_um::AbstractVector{<:Real}`, `y_um::AbstractVector{<:Real}`: original
-  emitter coordinates in µm. Same length.
-- `fov_um::NTuple{4,Float64}`: camera FOV bounds in µm, ordered
-  `(xmin_um, xmax_um, ymin_um, ymax_um)`. Validated `xmin < xmax` and
-  `ymin < ymax`.
-
-# Keyword arguments
-- `params::EdgeClassifyConfig`: pipeline parameters.
-- `out_dir, condition, cell`: required when `write_artifacts=true`. Output
-  goes to `<out_dir>/<condition>/<cell>/`.
-- `write_artifacts::Bool`: emit `classified.tsv`, `polygon_loops.tsv`,
-  `loop_diagnostics.csv`, `params.json`, `manifest.json`.
-- `write_renders::Bool`: also emit diagnostic PNG renders (currently a
-  no-op placeholder; renders live outside the package proper for now).
-
-# Returns
-An `EdgeClassificationResult`. Class labels partition the input set.
+The SMLD method follows the package `(out, Info)` convention: it returns the smld
+(with the primary class mirrored into `smld.metadata["edge_classify_class"]`) and an
+[`EdgeClassifyInfo`](@ref). The coordinate method is the computational core and
+returns the `info` directly; `fov_um = (xmin, xmax, ymin, ymax)` in µm.
 """
-function classify_emitters(
-    x_um::AbstractVector{<:Real},
-    y_um::AbstractVector{<:Real};
-    fov_um::NTuple{4,Float64},
-    params::EdgeClassifyConfig = EdgeClassifyConfig(),
-    out_dir::Union{Nothing,AbstractString} = nothing,
-    condition::Union{Nothing,AbstractString} = nothing,
-    cell::Union{Nothing,AbstractString} = nothing,
-    write_artifacts::Bool = false,
-    write_renders::Bool = false,
-    smld_input_meta::Union{Nothing,Dict{String,Any}} = nothing,
-)
+function classify_emitters(smld::SMLMData.BasicSMLD, cfg::AbstractEdgeClassifyConfig)
+    n = length(smld.emitters)
+    x = Vector{Float64}(undef, n); y = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        x[i] = smld.emitters[i].x; y[i] = smld.emitters[i].y
+    end
+    fov = (Float64(smld.camera.pixel_edges_x[1]), Float64(smld.camera.pixel_edges_x[end]),
+           Float64(smld.camera.pixel_edges_y[1]), Float64(smld.camera.pixel_edges_y[end]))
+    info = classify_emitters(x, y, cfg; fov_um = fov)
+    meta = copy(smld.metadata)
+    meta["edge_classify_class"] = String.(info.class)
+    smld_out = SMLMData.BasicSMLD(smld.emitters, smld.camera, smld.n_frames,
+                                  smld.n_datasets, meta)
+    return smld_out, info
+end
+
+function classify_emitters(x_um::AbstractVector{<:Real}, y_um::AbstractVector{<:Real},
+                           cfg::AbstractEdgeClassifyConfig; fov_um::NTuple{4,Float64})
     length(x_um) == length(y_um) ||
         throw(ArgumentError("x_um and y_um must have equal length"))
     fov_um[1] < fov_um[2] ||
         throw(ArgumentError("fov_um requires xmin < xmax (got $(fov_um[1]) >= $(fov_um[2]))"))
     fov_um[3] < fov_um[4] ||
         throw(ArgumentError("fov_um requires ymin < ymax (got $(fov_um[3]) >= $(fov_um[4]))"))
-    params.METHOD in _VALID_METHODS ||
-        throw(ArgumentError("params.METHOD must be one of $(_VALID_METHODS); got \"$(params.METHOD)\""))
-    if params.METHOD == _METHOD_CONCAVE_REFINED
-        throw(ArgumentError(
-            "METHOD=\"concave_refined\" is reserved for the concave-membrane " *
-            "branch and is not implemented yet; use METHOD=\"outer_polygon\", " *
-            "\"grid_hybrid\", or \"mask_carve\""))
-    end
-    if params.METHOD == _METHOD_MASK_CARVE
-        params.MASK_CARVE_SIGMA_UM > 0 ||
-            throw(ArgumentError("MASK_CARVE_SIGMA_UM must be positive; got $(params.MASK_CARVE_SIGMA_UM)"))
-        params.MASK_CARVE_PIXEL_UM > 0 ||
-            throw(ArgumentError("MASK_CARVE_PIXEL_UM must be positive; got $(params.MASK_CARVE_PIXEL_UM)"))
-        params.MASK_CARVE_K_NOISE > 0 ||
-            throw(ArgumentError("MASK_CARVE_K_NOISE must be positive; got $(params.MASK_CARVE_K_NOISE)"))
-        params.MASK_CARVE_MIN_COMPONENT_FRAC >= 0 ||
-            throw(ArgumentError("MASK_CARVE_MIN_COMPONENT_FRAC must be >= 0; got $(params.MASK_CARVE_MIN_COMPONENT_FRAC)"))
-        params.MASK_CARVE_FILL_HOLE_MAX_UM2 >= 0 ||
-            throw(ArgumentError("MASK_CARVE_FILL_HOLE_MAX_UM2 must be >= 0; got $(params.MASK_CARVE_FILL_HOLE_MAX_UM2)"))
-    end
-    if params.METHOD == _METHOD_KDE_VALLEY
-        params.KDE_SIGMA_NM > 0 ||
-            throw(ArgumentError("KDE_SIGMA_NM must be positive; got $(params.KDE_SIGMA_NM)"))
-        params.KDE_RMAX_SIGMA > 0 ||
-            throw(ArgumentError("KDE_RMAX_SIGMA must be positive; got $(params.KDE_RMAX_SIGMA)"))
-        params.KDE_VALLEY_NBINS > 1 ||
-            throw(ArgumentError("KDE_VALLEY_NBINS must be > 1; got $(params.KDE_VALLEY_NBINS)"))
-        params.FOOTPRINT_BIN_UM > 0 ||
-            throw(ArgumentError("FOOTPRINT_BIN_UM must be positive; got $(params.FOOTPRINT_BIN_UM)"))
-        params.ENCLOSURE_BIN_UM > 0 ||
-            throw(ArgumentError("ENCLOSURE_BIN_UM must be positive; got $(params.ENCLOSURE_BIN_UM)"))
-        (1 <= params.ENCLOSURE_MIN_HITS <= 8) ||
-            throw(ArgumentError("ENCLOSURE_MIN_HITS must be in 1:8; got $(params.ENCLOSURE_MIN_HITS)"))
-    end
-    if write_artifacts
-        out_dir === nothing &&
-            throw(ArgumentError("write_artifacts=true requires out_dir"))
-        condition === nothing &&
-            throw(ArgumentError("write_artifacts=true requires condition"))
-        cell === nothing &&
-            throw(ArgumentError("write_artifacts=true requires cell"))
-    end
-
+    validate(cfg)
     t0 = time()
     x = collect(Float64, x_um); y = collect(Float64, y_um)
+    raw = _classify(x, y, fov_um, cfg)
+    return _build_info(raw, cfg, fov_um, t0)
+end
+
+# Dispatch fallback for an unsupported config type (mirrors `cluster`).
+_classify(::Vector{Float64}, ::Vector{Float64}, ::NTuple{4,Float64},
+          cfg::AbstractEdgeClassifyConfig) =
+    error("classify_emitters has no method for config type $(typeof(cfg)); " *
+          "use a concrete config: OuterPolygonConfig, GridHybridConfig, " *
+          "MaskCarveConfig, or KdeValleyConfig.")
+
+# ---- polygon family: pure core (no Info, no IO, no runtime) ------------------
+#
+# Faithful transcription of the v1 flow: reflect → build Xfull (originals then
+# reflected) → multi-K tissue mask → alpha-shape → effective polygon (hook) →
+# point-in-polygon + membrane band on ORIGINALS → label refinement (hook). The
+# orchestration order + Xfull column layout are parity-load-bearing.
+function _classify_polygon(x::Vector{Float64}, y::Vector{Float64},
+                           fov::NTuple{4,Float64}, cfg::AbstractPolygonConfig)
     n = length(x)
-
-    # kde_valley: validated adaptive gate. Gates on the ORIGINAL cloud
-    # (KDE-valley + footprint) then runs the v1 outer-polygon geometry on the
-    # footprint subset and folds enclosure-recovered interior. Distinct enough
-    # from the v1 reflect-then-gate flow to live in its own path.
-    if params.METHOD == _METHOD_KDE_VALLEY
-        return _classify_kde_valley(x, y, fov_um, params, t0;
-                                    out_dir = out_dir, condition = condition,
-                                    cell = cell, write_artifacts = write_artifacts,
-                                    write_renders = write_renders,
-                                    smld_input_meta = smld_input_meta)
-    end
-
-    # FOV truncation detection + reflection.
-    sides = _truncated_sides(x, y, fov_um, params.FOV_TRUNC_TOL_NM / 1000)
+    sides = _truncated_sides(x, y, fov, cfg.fov_trunc_tol_nm / 1000)
     xfull, yfull, n_reflected = _reflect_emitters(
-        x, y, fov_um, sides, params.REFLECT_RADIUS_NM / 1000)
+        x, y, fov, sides, cfg.reflect_radius_nm / 1000)
     Xfull = Matrix{Float64}(undef, 2, length(xfull))
     @inbounds for i in eachindex(xfull)
         Xfull[1, i] = xfull[i]; Xfull[2, i] = yfull[i]
     end
 
-    # Multi-K density tissue mask on augmented set.
-    tmask = _tissue_mask(Xfull, params.K_LIST, params.RHO_K_THRESH)
-
-    # Alpha-shape on tissue points.
-    tissue_idx = findall(tmask)
-    Xc = Xfull[:, tissue_idx]
-    loops = _alpha_shape_loops(Xc, params.ALPHA_NM / 1000)
+    tmask = _tissue_mask(Xfull, cfg.k_list, cfg.rho_k_thresh)
+    Xc = Xfull[:, findall(tmask)]
+    loops = _alpha_shape_loops(Xc, cfg.alpha_nm / 1000)
     isempty(loops) && throw(ErrorException(
-        "no boundary loops found at ALPHA_NM=$(params.ALPHA_NM); " *
+        "no boundary loops found at alpha_nm=$(cfg.alpha_nm); " *
         "check inputs or relax the alpha threshold"))
 
-    v1_outer = loops[1]
-    mask_carve_diag::Union{Nothing, MaskCarveDiagnostic} = nothing
-    if params.METHOD == _METHOD_MASK_CARVE
-        carve_poly, mask_carve_diag = _build_mask_carve(v1_outer, x, y, fov_um, params)
-        outer_polygon = carve_poly
-    else
-        outer_polygon = v1_outer
+    poly, aux = _effective_polygon(loops, x, y, fov, cfg)
+    class, inside_outer, dist = _label(x, y, poly, cfg.membrane_nm / 1000)
+    _refine!(class, inside_outer, dist, x, y, fov, cfg)
+
+    Xorig = Matrix{Float64}(undef, 2, n)
+    @inbounds for i in 1:n
+        Xorig[1, i] = x[i]; Xorig[2, i] = y[i]
+    end
+    loop_diags = _compute_loop_diagnostics(loops, x, y, Xorig, fov, _diag_density_thresh(cfg))
+
+    return (; class, inside_outer, dist, loops, poly, aux,
+            sides, n_reflected, loop_diags)
+end
+
+_classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
+          cfg::AbstractPolygonConfig) = _classify_polygon(x, y, fov, cfg)
+
+# ---- kde_valley: own gate + order; reuses the polygon core on the subset -----
+function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
+                   cfg::KdeValleyConfig)
+    n = length(x)
+    fp = _kde_valley_footprint(x, y, cfg)
+    any(fp) || throw(ErrorException(
+        "kde_valley: KDE-valley + footprint gate produced empty tissue " *
+        "(sigma_nm=$(cfg.sigma_nm)); cloud too sparse or sigma too small"))
+    idx = findall(fp)
+
+    # Polygon geometry on the footprint subset. Internal k-NN gate OFF
+    # (rho_k_thresh=0); the KDE gate already selected tissue. Shared alpha + α=600.
+    sub = OuterPolygonConfig(alpha_nm = cfg.alpha_nm, membrane_nm = cfg.membrane_nm,
+                             reflect_radius_nm = cfg.reflect_radius_nm,
+                             fov_trunc_tol_nm = cfg.fov_trunc_tol_nm,
+                             rho_k_thresh = 0.0)
+    r = _classify_polygon(x[idx], y[idx], fov, sub)
+
+    class = fill(:outside, n)
+    inside_outer = falses(n)
+    dist = fill(NaN, n)
+    @inbounds for (k, i) in enumerate(idx)
+        class[i] = r.class[k]
+        inside_outer[i] = r.inside_outer[k]
+        dist[i] = r.dist[k]
     end
 
-    # Per-emitter classification on ORIGINALS only — uses the EFFECTIVE
-    # outer polygon (carve for mask_carve when applied; v1 outer otherwise).
+    _enclosure_fill!(class, x, y, cfg)
+
+    return (; class, inside_outer, dist, loops = r.loops, poly = r.poly, aux = nothing,
+            sides = r.sides, n_reflected = r.n_reflected, loop_diags = r.loop_diags)
+end
+
+# ---- shared helpers ----------------------------------------------------------
+
+# Point-in-polygon + membrane band on the ORIGINAL emitters (threaded).
+function _label(x::Vector{Float64}, y::Vector{Float64},
+                poly::Vector{NTuple{2,Float64}}, membrane_um::Float64)
+    n = length(x)
     inside_outer = falses(n)
-    dist_to_outer = fill(NaN, n)
+    dist = fill(NaN, n)
     Threads.@threads for i in 1:n
-        if _point_in_polygon(x[i], y[i], outer_polygon)
+        if _point_in_polygon(x[i], y[i], poly)
             inside_outer[i] = true
         end
     end
     Threads.@threads for i in 1:n
         if inside_outer[i]
-            dist_to_outer[i] = _dist_to_polygon(x[i], y[i], outer_polygon)
+            dist[i] = _dist_to_polygon(x[i], y[i], poly)
         end
     end
-
-    membrane_um = params.MEMBRANE_NM / 1000
-    class = Vector{String}(undef, n)
+    class = Vector{Symbol}(undef, n)
     @inbounds for i in 1:n
         if !inside_outer[i]
-            class[i] = "outside"
-        elseif dist_to_outer[i] < membrane_um
-            class[i] = "membrane"
+            class[i] = :outside
+        elseif dist[i] < membrane_um
+            class[i] = :membrane
         else
-            class[i] = "interior"
+            class[i] = :interior
         end
     end
+    return class, inside_outer, dist
+end
 
-    if params.METHOD == _METHOD_GRID_HYBRID
-        _apply_grid_hybrid!(class, x, y, dist_to_outer, fov_um, params)
-    end
+# Effective classification polygon. Default = the alpha outer loop; MaskCarve
+# substitutes a carve. Returns (polygon, aux) where aux is method-specific
+# provenance (a MaskCarveDiagnostic, or nothing).
+_effective_polygon(loops, x, y, fov, ::AbstractPolygonConfig) = (loops[1], nothing)
 
-    # Per-loop diagnostics — uses originals-only KDTree.
-    Xorig = Matrix{Float64}(undef, 2, n)
-    @inbounds for i in 1:n
-        Xorig[1, i] = x[i]; Xorig[2, i] = y[i]
-    end
-    loop_diags = _compute_loop_diagnostics(loops, x, y, Xorig, fov_um, params)
+# Post-label refinement hook. Default = no-op; GridHybrid promotes interior→membrane.
+_refine!(class, inside_outer, dist, x, y, fov, ::AbstractPolygonConfig) = nothing
 
-    runtime_s = time() - t0
-    in_cell = .!(class .== "outside")
-    result = EdgeClassificationResult(
-        n, class, inside_outer, in_cell, dist_to_outer,
-        outer_polygon, loops, loop_diags,
-        params, fov_um, sides, n_reflected, runtime_s,
-        mask_carve_diag,
+function _build_info(raw, cfg::AbstractEdgeClassifyConfig, fov::NTuple{4,Float64}, t0::Float64)
+    class = raw.class
+    n = length(class)
+    n_out = count(==(:outside), class)
+    n_mem = count(==(:membrane), class)
+    n_int = count(==(:interior), class)
+    mcd = raw.aux isa MaskCarveDiagnostic ? raw.aux : nothing
+    return EdgeClassifyInfo(
+        n, class, raw.inside_outer, raw.dist,
+        raw.poly, raw.loops, raw.loop_diags, mcd,
+        cfg, fov, raw.sides, raw.n_reflected, time() - t0,
+        n_out, n_mem, n_int,
     )
-
-    if write_artifacts
-        leaf = joinpath(out_dir, condition, cell)
-        mkpath(leaf)
-        _write_artifacts(leaf, result;
-                         condition = condition, cell = cell,
-                         smld_input_meta = smld_input_meta,
-                         x_um = x, y_um = y,
-                         write_renders = write_renders)
-    end
-
-    return result
 end

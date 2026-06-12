@@ -22,7 +22,7 @@ function _compute_loop_diagnostics(
     x_um::Vector{Float64}, y_um::Vector{Float64},
     Xorig::Matrix{Float64},
     fov_um::NTuple{4,Float64},
-    params::EdgeClassifyConfig,
+    rho_thresh::Float64,
 )
     fxmin, fxmax, fymin, fymax = fov_um
     n_orig = length(x_um)
@@ -51,7 +51,7 @@ function _compute_loop_diagnostics(
             d = dists[end]
             rhos[vi] = (K - 1) * inv_pi / (d * d)
         end
-        frac_dense = count(>=( params.RHO_K_THRESH ), rhos) / nv
+        frac_dense = count(>=(rho_thresh), rhos) / nv
         med_rho = Statistics.median(rhos)
         frac_in_fov = in_fov_count / nv
 

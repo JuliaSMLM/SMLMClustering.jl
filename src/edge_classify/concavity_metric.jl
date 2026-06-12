@@ -1,100 +1,74 @@
 """
-    compute_concavity_metric(result, x_um, y_um;
-                             buffer_um = result.params_used.CONCAVITY_METRIC_BUFFER_NM/1000,
-                             asym_R_nm = 1000.0,
-                             asym_gate = 0.20,
-                             rho_lo = 200.0,
-                             intracellular_dense_threshold = 0.8)
+    compute_concavity_metric(info::EdgeClassifyInfo, x_um, y_um;
+                             buffer_um = 2.0, asym_R_nm = 1000.0, asym_gate = 0.20,
+                             rho_lo = 200.0, intracellular_dense_threshold = 0.8)
         -> ConcavityMetricReport
 
-Boundary-proximal concavity-error metric for the v1 outer-polygon
-classifier. Identifies emitters that v1 calls `interior` but live in deep
-concave bays the alpha-shape bridged across.
+Boundary-proximal concavity-error metric for the outer-polygon classifier.
+Identifies emitters classified `:interior` that live in deep concave bays the
+alpha-shape bridged across.
 
-A v1 `interior` emitter is a **suspect** iff:
+A `:interior` emitter is a **suspect** iff: (1) it lies within `buffer_um` of the
+outer polygon boundary; (2) it is not inside an "intracellular void" loop
+(non-outer loop with `frac_in_fov == 1` and `frac_dense >= intracellular_dense_threshold`);
+(3) its directional asymmetry at `asym_R_nm` is `>= asym_gate`; (4) its local
+density ρ_K(K=128) is `<= rho_lo`.
 
-1. It lies within `buffer_um` of the outer polygon boundary (boundary-
-   proximal — bays are at the membrane, not deep in the cell).
-2. It is NOT inside any "intracellular void" loop, defined raw-metric-wise
-   as a non-outer loop with `frac_in_fov == 1` AND
-   `frac_dense >= intracellular_dense_threshold`. These are nuclei /
-   sparse intracellular regions; they should not count as membrane
-   concavity errors.
-3. Its directional asymmetry at radius `asym_R_nm` is `>= asym_gate`
-   (high asym → it lives near a real edge, contradicting v1's `interior`
-   call).
-4. Its local density `ρ_K(K=128)` (originals KDTree) is `<= rho_lo`
-   (sparse local → not deep tissue).
-
-Stratification: each suspect's nearest outer-polygon segment is
-classified `interior_fov` if both endpoints are inside the FOV,
-`fov_edge` otherwise. Approach B (vertex snap to asym ridge) is expected
-to fix `interior_fov` suspects; Approach C (FOV-crossing loops as
-auxiliary boundary) is expected to fix `fov_edge` suspects.
-
-`buffer_um` defaults to `params_used.CONCAVITY_METRIC_BUFFER_NM/1000`.
+`buffer_um` is a diagnostic parameter (default 2.0 µm), not part of the classifier
+config.
 """
 function compute_concavity_metric(
-    result::EdgeClassificationResult,
+    info::EdgeClassifyInfo,
     x_um::AbstractVector{<:Real},
     y_um::AbstractVector{<:Real};
-    buffer_um::Float64 = result.params_used.CONCAVITY_METRIC_BUFFER_NM / 1000,
+    buffer_um::Float64 = 2.0,
     asym_R_nm::Float64 = 1000.0,
     asym_gate::Float64 = 0.20,
     rho_lo::Float64 = 200.0,
     intracellular_dense_threshold::Float64 = 0.8,
 )
     n = length(x_um)
-    n == result.n_emitters ||
-        throw(ArgumentError("x_um/y_um length must match result.n_emitters"))
+    n == info.n_emitters ||
+        throw(ArgumentError("x_um/y_um length must match info.n_emitters"))
     n == length(y_um) ||
         throw(ArgumentError("x_um and y_um must have equal length"))
 
-    fxmin, fxmax, fymin, fymax = result.fov_um
+    fxmin, fxmax, fymin, fymax = info.fov_um
 
-    # Identify intracellular-void loops (raw-metric, not heuristic_type).
-    # Note: result.loop_diagnostics[1] is the outer; never excluded.
+    # Intracellular-void loops (raw-metric). loop_diagnostics[1] is the outer.
     void_loop_ids = Int[]
-    for d in result.loop_diagnostics
+    for d in info.loop_diagnostics
         d.loop_id == 1 && continue
         if d.frac_in_fov == 1.0 && d.frac_dense >= intracellular_dense_threshold
             push!(void_loop_ids, d.loop_id)
         end
     end
-    void_polys = [result.loops[lid] for lid in void_loop_ids]
+    void_polys = [info.loops[lid] for lid in void_loop_ids]
 
-    # Originals KDTree for asym + ρ_K.
     Xorig = Matrix{Float64}(undef, 2, n)
     @inbounds for i in 1:n
         Xorig[1, i] = x_um[i]; Xorig[2, i] = y_um[i]
     end
     tree = NearestNeighbors.KDTree(Xorig)
 
-    # Pre-compute ρ_K(K=128) for ALL originals using the same convention as
-    # geometry.jl's `_knn_K_density`: when the query point is itself a member
-    # of the tree, knn(tree, X, K+1) returns self at index 1 (distance 0)
-    # and the K-th true neighbor at index K+1; the density estimator is
-    # (K-1) / (π · d_K²) for 2D — counts K-1 strict-interior neighbors in an
-    # open disk of radius d_K. Matches `_tissue_mask` and `_compute_loop_diagnostics`.
     K_density = 128
     rho_all = _knn_K_density(Xorig, K_density, tree)
 
     asym_R_um = asym_R_nm / 1000
 
-    n_interior = sum(==("interior"), result.class)
+    n_interior = count(==(:interior), info.class)
     n_eligible = 0
     suspects = Int[]
     suspect_is_fov_edge = Bool[]
 
-    outer = result.outer_polygon
+    outer = info.outer_polygon
     no_outer = length(outer)
 
     @inbounds for i in 1:n
-        result.class[i] == "interior" || continue
-        d_outer = result.dist_to_outer_um[i]
+        info.class[i] == :interior || continue
+        d_outer = info.dist_to_outer_um[i]
         isnan(d_outer) && continue
         d_outer <= buffer_um || continue
-        # Exclude intracellular voids
         in_void = false
         for vp in void_polys
             if _point_in_polygon(x_um[i], y_um[i], vp)
@@ -104,10 +78,9 @@ function compute_concavity_metric(
         in_void && continue
         n_eligible += 1
 
-        # Asymmetry at asym_R_nm.
         idxs = NearestNeighbors.inrange(tree, [x_um[i], y_um[i]], asym_R_um)
         m = length(idxs)
-        m >= 4 || continue   # need a few neighbors for a meaningful centroid
+        m >= 4 || continue
         cx = 0.0; cy = 0.0
         for j in idxs
             cx += x_um[j]; cy += y_um[j]
@@ -116,11 +89,8 @@ function compute_concavity_metric(
         asym = hypot(cx - x_um[i], cy - y_um[i]) / asym_R_um
         asym >= asym_gate || continue
 
-        # Local density ρ_K(K=128) — pre-computed against originals KDTree.
         rho_all[i] <= rho_lo || continue
 
-        # Stratify by nearest outer segment.
-        # Find nearest segment: argmin over i of dist to segment (i, i+1).
         best_seg = 1; best_d = Inf
         for s in 1:no_outer
             sj = s == no_outer ? 1 : s + 1
