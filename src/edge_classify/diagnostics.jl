@@ -55,11 +55,8 @@ function _compute_loop_diagnostics(
         med_rho = Statistics.median(rhos)
         frac_in_fov = in_fov_count / nv
 
-        # Only loop_id == 1 (the alpha outer) participates in inside_outer.
-        # For MaskCarveConfig the alpha outer is still marked used_in_outer —
-        # it is the source envelope for the carve — but the EFFECTIVE
-        # classification boundary is the carve polygon, recorded in
-        # `effective_outer.tsv` (not loop_id == 1 of polygon_loops.tsv).
+        # Only loop_id == 1 (the alpha outer) participates in the inside_outer
+        # decision; interior / hole / reflection-space loops are diagnostic-only.
         used_in_outer = (lid == 1)
         diags[lid] = LoopDiagnostic(
             lid, nv, area, n_inside, frac_in_fov, frac_dense, med_rho,
