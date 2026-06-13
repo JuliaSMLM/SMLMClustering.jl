@@ -29,33 +29,6 @@ struct LoopDiagnostic
 end
 
 """
-    MaskCarveDiagnostic
-
-Per-call diagnostic for `MaskCarveConfig`. `applied = false` means the carve fell
-back to the v1 outer polygon (degenerate mask / empty intersection / polygonization
-failure); the v1 polygon is used in that case.
-"""
-struct MaskCarveDiagnostic
-    applied::Bool
-    fallback_reason::String
-    sigma_um::Float64
-    k_noise::Float64
-    pixel_um::Float64
-    min_component_frac::Float64
-    fill_hole_max_um2::Float64
-    v1_polygon_area_um2::Float64
-    carve_polygon_area_um2::Float64
-    area_delta_um2::Float64
-    v1_only_area_um2::Float64
-    carve_only_area_um2::Float64
-    med_v1_carve_distance_um::Float64
-    p95_v1_carve_distance_um::Float64
-    n_holes_filled::Int
-    n_holes_preserved::Int
-    n_carve_polygon_pts::Int
-end
-
-"""
     ConcavityMetricReport
 
 Boundary-proximal concavity-error metric for the outer-polygon classifier (see
@@ -83,15 +56,15 @@ Result of `classify_emitters`. `class` is the authoritative per-emitter answer
 (`:outside`, `:membrane`, `:interior`), a partition of the input set.
 
 `inside_outer` is strictly **geometric** (containment in the alpha outer loop) with
-`dist_to_outer_um` its distance (`NaN` when not inside). For `KdeValleyConfig` the
-enclosure stage folds enclosed background into `class == :interior` while leaving
-`inside_outer` geometric, so the enclosure-recovered set is exactly
-`class == :interior && inside_outer == false` (with `dist_to_outer_um == NaN`).
-Topological cell membership is `in_cell(info) == (class .!= :outside)`. Downstream
-interior filters should read `class`, never `inside_outer`.
+`dist_to_outer_um` its distance (`NaN` when not inside). For `OuterPolygonConfig`
+it is computed for every emitter. For `KdeValleyConfig` it is the geometry on the
+**footprint subset**: off-footprint emitters (gated out by the KDE valley) carry
+`inside_outer = false` / `dist = NaN`, and the enclosure stage then folds enclosed
+background into `class == :interior` — so the enclosure-recovered set is exactly
+`class == :interior && inside_outer == false`. Read `class` for the answer and
+`in_cell(info)` for topological membership; never filter on `inside_outer`.
 
-`config` holds the concrete config that ran (honest provenance);
-`mask_carve_diagnostic` is populated only for `MaskCarveConfig`.
+`config` holds the concrete config that ran (honest provenance).
 """
 struct EdgeClassifyInfo{C<:AbstractEdgeClassifyConfig} <: SMLMData.AbstractSMLMInfo
     n_emitters::Int
@@ -101,7 +74,6 @@ struct EdgeClassifyInfo{C<:AbstractEdgeClassifyConfig} <: SMLMData.AbstractSMLMI
     outer_polygon::Vector{NTuple{2,Float64}}
     loops::Vector{Vector{NTuple{2,Float64}}}
     loop_diagnostics::Vector{LoopDiagnostic}
-    mask_carve_diagnostic::Union{Nothing,MaskCarveDiagnostic}
     config::C
     fov_um::NTuple{4,Float64}
     truncated_sides::NamedTuple{(:L, :R, :B, :T), NTuple{4,Bool}}
@@ -115,9 +87,9 @@ end
 """
     in_cell(info) -> BitVector
 
-Topological cell membership, `== (info.class .!= :outside)`. For
-`KdeValleyConfig` this is a superset of `inside_outer` (includes enclosure-recovered
-interior); for the polygon family it equals `inside_outer`.
+Topological cell membership, `== (info.class .!= :outside)`. For `KdeValleyConfig`
+this is a superset of `inside_outer` (includes enclosure-recovered interior); for
+`OuterPolygonConfig` it equals `inside_outer`.
 """
 in_cell(info::EdgeClassifyInfo) = info.class .!= :outside
 
@@ -125,3 +97,10 @@ in_cell(info::EdgeClassifyInfo) = info.class .!= :outside
     interior_fraction(info) -> Float64
 """
 interior_fraction(info::EdgeClassifyInfo) = info.n_interior / max(info.n_emitters, 1)
+
+function Base.show(io::IO, info::EdgeClassifyInfo)
+    print(io, "EdgeClassifyInfo(", method_name(info.config), ": ",
+          info.n_interior, " interior / ", info.n_membrane, " membrane / ",
+          info.n_outside, " outside of ", info.n_emitters, " emitters, ",
+          round(info.runtime_s; digits = 2), "s)")
+end

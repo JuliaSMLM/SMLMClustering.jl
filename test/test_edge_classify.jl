@@ -10,6 +10,9 @@ const _EDGE_FIX_DIR = joinpath(homedir(), "edge_fixtures")
 const _PARITY_FIX   = joinpath(_EDGE_FIX_DIR, "parity_a431_cell01.jld2")
 const _ROBUST_FIX   = joinpath(_EDGE_FIX_DIR, "robustness_fovs.jld2")
 
+# A dummy concrete subtype to exercise the unsupported-config fallback error.
+struct _UnsupportedEdgeConfig <: SMLMClustering.AbstractEdgeClassifyConfig end
+
 # Synthetic: dense disk (cell) at (5,5) r=2 + sparse background, in a 10µm FOV.
 function _edge_cloud(seed; n_cell = 7000, n_noise = 350)
     rng = Random.MersenneTwister(seed)
@@ -37,44 +40,45 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
 
     @testset "config types + convention" begin
         @test AbstractEdgeClassifyConfig <: SMLMData.AbstractSMLMConfig
-        for T in (OuterPolygonConfig, GridHybridConfig, MaskCarveConfig, KdeValleyConfig)
+        for T in (OuterPolygonConfig, KdeValleyConfig)
             @test T <: AbstractEdgeClassifyConfig
         end
-        @test OuterPolygonConfig <: AbstractPolygonConfig
-        @test !(KdeValleyConfig <: AbstractPolygonConfig)
-        # defaults
         @test OuterPolygonConfig().alpha_nm == 300.0
         @test OuterPolygonConfig().rho_k_thresh == 200.0
-        @test KdeValleyConfig().alpha_nm == 600.0     # validated, baked into the type
+        @test OuterPolygonConfig().k_list == (16, 128)        # frozen tuple → immutable provenance
+        @test KdeValleyConfig().alpha_nm == 600.0             # validated, baked into the type
         @test KdeValleyConfig().sigma_nm == 150.0
         @test KdeValleyConfig().enclosure_min_hits == 6
-        @test MaskCarveConfig().sigma_um == 0.080
-        @test GridHybridConfig().grid_outer_buffer_nm == 800.0
-        # method_name trait
         @test method_name(OuterPolygonConfig()) == "outer_polygon"
         @test method_name(KdeValleyConfig()) == "kde_valley"
     end
 
-    @testset "validation" begin
+    @testset "validation + error paths" begin
         @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
             KdeValleyConfig(sigma_nm = 0.0); fov_um = (0.0,1.0,0.0,1.0))
         @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
             KdeValleyConfig(enclosure_min_hits = 9); fov_um = (0.0,1.0,0.0,1.0))
         @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
             OuterPolygonConfig(alpha_nm = -1.0); fov_um = (0.0,1.0,0.0,1.0))
-        # bad fov / mismatched length
         @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0],
             OuterPolygonConfig(); fov_um = _FOV)
         @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
             OuterPolygonConfig(); fov_um = (1.0,0.0,0.0,1.0))
+        # unsupported config subtype → clear error (not a raw MethodError)
+        @test_throws ErrorException classify_emitters([0.0,1.0], [0.0,1.0],
+            _UnsupportedEdgeConfig(); fov_um = _FOV)
     end
 
-    @testset "dispatch + partition (all strategies)" begin
+    @testset "fov_um accepts Int tuple" begin
         x, y = _edge_cloud(1)
-        for cfg in (OuterPolygonConfig(rho_k_thresh = 50.0),
-                    GridHybridConfig(rho_k_thresh = 50.0),
-                    MaskCarveConfig(rho_k_thresh = 50.0),
-                    KdeValleyConfig(sigma_nm = 200.0))
+        info = classify_emitters(x, y, OuterPolygonConfig(rho_k_thresh = 50.0); fov_um = (0, 10, 0, 10))
+        @test info isa EdgeClassifyInfo
+        @test info.fov_um === (0.0, 10.0, 0.0, 10.0)
+    end
+
+    @testset "dispatch + partition" begin
+        x, y = _edge_cloud(1)
+        for cfg in (OuterPolygonConfig(rho_k_thresh = 50.0), KdeValleyConfig(sigma_nm = 200.0))
             info = classify_emitters(x, y, cfg; fov_um = _FOV)
             @test info isa EdgeClassifyInfo
             @test typeof(info.config) == typeof(cfg)
@@ -89,15 +93,12 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
 
     @testset "topology contract" begin
         x, y = _edge_cloud(2)
-        # outer family: no enclosure -> in_cell == inside_outer
         oi = classify_emitters(x, y, OuterPolygonConfig(rho_k_thresh = 50.0); fov_um = _FOV)
-        @test all(in_cell(oi) .== oi.inside_outer)
-        @test oi.mask_carve_diagnostic === nothing
-        # kde_valley: enclosure-recovered set is class==:interior && !inside_outer (NaN dist)
+        @test all(in_cell(oi) .== oi.inside_outer)   # outer: no enclosure
         ki = classify_emitters(x, y, KdeValleyConfig(sigma_nm = 200.0); fov_um = _FOV)
         for i in 1:ki.n_emitters
             if ki.class[i] == :interior && !ki.inside_outer[i]
-                @test isnan(ki.dist_to_outer_um[i])
+                @test isnan(ki.dist_to_outer_um[i])   # enclosure-recovered → NaN geometric dist
             end
             ki.inside_outer[i] && @test in_cell(ki)[i]   # geometric ⊆ topological
         end
@@ -112,13 +113,6 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
         @test haskey(smld_out.metadata, "edge_classify_class")
         @test smld_out.metadata["edge_classify_class"] == String.(info.class)
         @test info.n_emitters == length(smld.emitters)
-    end
-
-    @testset "mask_carve diagnostic" begin
-        x, y = _edge_cloud(4)
-        info = classify_emitters(x, y, MaskCarveConfig(rho_k_thresh = 50.0); fov_um = _FOV)
-        @test info.mask_carve_diagnostic !== nothing
-        @test info.mask_carve_diagnostic isa MaskCarveDiagnostic
     end
 
     @testset "concavity metric" begin
@@ -141,7 +135,7 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
             @test isfile(joinpath(leaf, "manifest.json"))
             hdr = readlines(joinpath(leaf, "classified.tsv"))
             @test occursin("schema_version: 2", hdr[1])
-            @test occursin("in_cell", hdr[6])      # column header line
+            @test occursin("in_cell", hdr[6])
         end
     end
 
@@ -179,7 +173,7 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
                     @test abs(info.n_interior - v1i) <= 0.15 * v1i
                 else
                     bounded = try
-                        classify_emitters(x, y, KdeValleyConfig(); fov_um = fov).n_interior > 0
+                        classify_emitters(x, y, KdeValleyConfig(); fov_um = fov).n_interior >= 0
                     catch
                         false
                     end

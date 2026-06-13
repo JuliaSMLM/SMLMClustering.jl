@@ -3,8 +3,7 @@
     classify_emitters(x_um, y_um, cfg::AbstractEdgeClassifyConfig; fov_um) -> info
 
 Classify each emitter as `:outside`, `:membrane`, or `:interior`. The concrete
-config type selects the strategy by dispatch (`OuterPolygonConfig`,
-`GridHybridConfig`, `MaskCarveConfig`, `KdeValleyConfig`).
+config type selects the strategy by dispatch (`OuterPolygonConfig`, `KdeValleyConfig`).
 
 The SMLD method follows the package `(out, Info)` convention: it returns the smld
 (with the primary class mirrored into `smld.metadata["edge_classify_class"]`) and an
@@ -28,35 +27,29 @@ function classify_emitters(smld::SMLMData.BasicSMLD, cfg::AbstractEdgeClassifyCo
 end
 
 function classify_emitters(x_um::AbstractVector{<:Real}, y_um::AbstractVector{<:Real},
-                           cfg::AbstractEdgeClassifyConfig; fov_um::NTuple{4,Float64})
+                           cfg::AbstractEdgeClassifyConfig; fov_um::NTuple{4,<:Real})
     length(x_um) == length(y_um) ||
         throw(ArgumentError("x_um and y_um must have equal length"))
-    fov_um[1] < fov_um[2] ||
-        throw(ArgumentError("fov_um requires xmin < xmax (got $(fov_um[1]) >= $(fov_um[2]))"))
-    fov_um[3] < fov_um[4] ||
-        throw(ArgumentError("fov_um requires ymin < ymax (got $(fov_um[3]) >= $(fov_um[4]))"))
+    fov = (Float64(fov_um[1]), Float64(fov_um[2]), Float64(fov_um[3]), Float64(fov_um[4]))
+    fov[1] < fov[2] ||
+        throw(ArgumentError("fov_um requires xmin < xmax (got $(fov[1]) >= $(fov[2]))"))
+    fov[3] < fov[4] ||
+        throw(ArgumentError("fov_um requires ymin < ymax (got $(fov[3]) >= $(fov[4]))"))
     validate(cfg)
-    t0 = time()
+    t0 = time_ns()
     x = collect(Float64, x_um); y = collect(Float64, y_um)
-    raw = _classify(x, y, fov_um, cfg)
-    return _build_info(raw, cfg, fov_um, t0)
+    raw = _classify(x, y, fov, cfg)
+    return _build_info(raw, cfg, fov, t0)
 end
 
-# Dispatch fallback for an unsupported config type (mirrors `cluster`).
-_classify(::Vector{Float64}, ::Vector{Float64}, ::NTuple{4,Float64},
-          cfg::AbstractEdgeClassifyConfig) =
-    error("classify_emitters has no method for config type $(typeof(cfg)); " *
-          "use a concrete config: OuterPolygonConfig, GridHybridConfig, " *
-          "MaskCarveConfig, or KdeValleyConfig.")
-
-# ---- polygon family: pure core (no Info, no IO, no runtime) ------------------
+# ---- outer_polygon: the pure core (no Info, no IO, no runtime) ---------------
 #
 # Faithful transcription of the v1 flow: reflect → build Xfull (originals then
-# reflected) → multi-K tissue mask → alpha-shape → effective polygon (hook) →
-# point-in-polygon + membrane band on ORIGINALS → label refinement (hook). The
-# orchestration order + Xfull column layout are parity-load-bearing.
+# reflected) → multi-K tissue mask → alpha-shape → point-in-polygon + membrane
+# band on ORIGINALS. The orchestration order + Xfull column layout are
+# parity-load-bearing.
 function _classify_polygon(x::Vector{Float64}, y::Vector{Float64},
-                           fov::NTuple{4,Float64}, cfg::AbstractPolygonConfig)
+                           fov::NTuple{4,Float64}, cfg::OuterPolygonConfig)
     n = length(x)
     sides = _truncated_sides(x, y, fov, cfg.fov_trunc_tol_nm / 1000)
     xfull, yfull, n_reflected = _reflect_emitters(
@@ -73,9 +66,8 @@ function _classify_polygon(x::Vector{Float64}, y::Vector{Float64},
         "no boundary loops found at alpha_nm=$(cfg.alpha_nm); " *
         "check inputs or relax the alpha threshold"))
 
-    poly, aux = _effective_polygon(loops, x, y, fov, cfg)
+    poly = loops[1]
     class, inside_outer, dist = _label(x, y, poly, cfg.membrane_nm / 1000)
-    _refine!(class, inside_outer, dist, x, y, fov, cfg)
 
     Xorig = Matrix{Float64}(undef, 2, n)
     @inbounds for i in 1:n
@@ -83,12 +75,11 @@ function _classify_polygon(x::Vector{Float64}, y::Vector{Float64},
     end
     loop_diags = _compute_loop_diagnostics(loops, x, y, Xorig, fov, _diag_density_thresh(cfg))
 
-    return (; class, inside_outer, dist, loops, poly, aux,
-            sides, n_reflected, loop_diags)
+    return (; class, inside_outer, dist, loops, poly, sides, n_reflected, loop_diags)
 end
 
 _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
-          cfg::AbstractPolygonConfig) = _classify_polygon(x, y, fov, cfg)
+          cfg::OuterPolygonConfig) = _classify_polygon(x, y, fov, cfg)
 
 # ---- kde_valley: own gate + order; reuses the polygon core on the subset -----
 function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
@@ -100,12 +91,12 @@ function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64
         "(sigma_nm=$(cfg.sigma_nm)); cloud too sparse or sigma too small"))
     idx = findall(fp)
 
-    # Polygon geometry on the footprint subset. Internal k-NN gate OFF
-    # (rho_k_thresh=0); the KDE gate already selected tissue. Shared alpha + α=600.
+    # Polygon geometry on the footprint subset. Empty k_list = internal density
+    # gate OFF (no k-NN; the KDE gate already selected tissue). Shared α=600.
     sub = OuterPolygonConfig(alpha_nm = cfg.alpha_nm, membrane_nm = cfg.membrane_nm,
                              reflect_radius_nm = cfg.reflect_radius_nm,
                              fov_trunc_tol_nm = cfg.fov_trunc_tol_nm,
-                             rho_k_thresh = 0.0)
+                             k_list = (), rho_k_thresh = 0.0)
     r = _classify_polygon(x[idx], y[idx], fov, sub)
 
     class = fill(:outside, n)
@@ -119,31 +110,31 @@ function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64
 
     _enclosure_fill!(class, x, y, cfg)
 
-    return (; class, inside_outer, dist, loops = r.loops, poly = r.poly, aux = nothing,
+    return (; class, inside_outer, dist, loops = r.loops, poly = r.poly,
             sides = r.sides, n_reflected = r.n_reflected, loop_diags = r.loop_diags)
 end
 
 # ---- shared helpers ----------------------------------------------------------
 
-# Point-in-polygon + membrane band on the ORIGINAL emitters (threaded).
+# Point-in-polygon + membrane band on the ORIGINAL emitters. Threads into a
+# Vector{Bool} (one byte per element → race-free; a BitVector would race on
+# shared words at @threads chunk boundaries), then packs to a BitVector.
 function _label(x::Vector{Float64}, y::Vector{Float64},
                 poly::Vector{NTuple{2,Float64}}, membrane_um::Float64)
     n = length(x)
-    inside_outer = falses(n)
+    inside = Vector{Bool}(undef, n)
     dist = fill(NaN, n)
     Threads.@threads for i in 1:n
         if _point_in_polygon(x[i], y[i], poly)
-            inside_outer[i] = true
-        end
-    end
-    Threads.@threads for i in 1:n
-        if inside_outer[i]
+            inside[i] = true
             dist[i] = _dist_to_polygon(x[i], y[i], poly)
+        else
+            inside[i] = false
         end
     end
     class = Vector{Symbol}(undef, n)
     @inbounds for i in 1:n
-        if !inside_outer[i]
+        if !inside[i]
             class[i] = :outside
         elseif dist[i] < membrane_um
             class[i] = :membrane
@@ -151,28 +142,26 @@ function _label(x::Vector{Float64}, y::Vector{Float64},
             class[i] = :interior
         end
     end
-    return class, inside_outer, dist
+    return class, BitVector(inside), dist
 end
 
-# Effective classification polygon. Default = the alpha outer loop; MaskCarve
-# substitutes a carve. Returns (polygon, aux) where aux is method-specific
-# provenance (a MaskCarveDiagnostic, or nothing).
-_effective_polygon(loops, x, y, fov, ::AbstractPolygonConfig) = (loops[1], nothing)
-
-# Post-label refinement hook. Default = no-op; GridHybrid promotes interior→membrane.
-_refine!(class, inside_outer, dist, x, y, fov, ::AbstractPolygonConfig) = nothing
-
-function _build_info(raw, cfg::AbstractEdgeClassifyConfig, fov::NTuple{4,Float64}, t0::Float64)
+function _build_info(raw, cfg::AbstractEdgeClassifyConfig, fov::NTuple{4,Float64}, t0::UInt64)
     class = raw.class
     n = length(class)
-    n_out = count(==(:outside), class)
-    n_mem = count(==(:membrane), class)
-    n_int = count(==(:interior), class)
-    mcd = raw.aux isa MaskCarveDiagnostic ? raw.aux : nothing
+    n_out = 0; n_mem = 0; n_int = 0
+    @inbounds for c in class
+        if c === :outside
+            n_out += 1
+        elseif c === :membrane
+            n_mem += 1
+        else
+            n_int += 1
+        end
+    end
     return EdgeClassifyInfo(
         n, class, raw.inside_outer, raw.dist,
-        raw.poly, raw.loops, raw.loop_diags, mcd,
-        cfg, fov, raw.sides, raw.n_reflected, time() - t0,
+        raw.poly, raw.loops, raw.loop_diags,
+        cfg, fov, raw.sides, raw.n_reflected, (time_ns() - t0) / 1e9,
         n_out, n_mem, n_int,
     )
 end

@@ -3,89 +3,43 @@ Config types for `classify_emitters`.
 
 `AbstractEdgeClassifyConfig` is a sibling of the package's `AbstractClusterConfig`
 / `AbstractStatisticsConfig` (all `<: SMLMData.AbstractSMLMConfig`); each concrete
-config is dispatched as a method of `classify_emitters`. `AbstractPolygonConfig`
-is the shared family — reflect → multi-K density gate → alpha-shape outer loop →
-point-in-polygon + membrane band — whose members differ only in two dispatched
-hooks (`_effective_polygon`, `_refine!`). `KdeValleyConfig` is its own family
-(gates on the original cloud, runs the polygon core on a footprint subset, folds
-enclosure) and carries the validated `alpha_nm = 600` as its own default.
+config is dispatched as a method of `classify_emitters`:
 
-Struct fields are lowercase (idiomatic Julia); the UPPERCASE `params.json` keys
-are produced only at the serialization boundary by `to_dict`.
+- `OuterPolygonConfig` — reflect → multi-K density gate → alpha-shape outer loop →
+  point-in-polygon + membrane band.
+- `KdeValleyConfig` — validated adaptive dSTORM gate (Gaussian-KDE + valley + footprint
+  + enclosure); gates on the original cloud, runs the outer-polygon geometry on the
+  footprint subset, then folds enclosure.
+
+Struct fields are lowercase (idiomatic Julia); the UPPERCASE `params.json` keys are
+produced only at the serialization boundary by `to_dict`.
 """
 
 abstract type AbstractEdgeClassifyConfig <: SMLMData.AbstractSMLMConfig end
 
-abstract type AbstractPolygonConfig <: AbstractEdgeClassifyConfig end
-
 """
     OuterPolygonConfig(; alpha_nm=300, membrane_nm=100, reflect_radius_nm=1500,
-                       fov_trunc_tol_nm=150, k_list=[16,128], rho_k_thresh=200)
+                       fov_trunc_tol_nm=150, k_list=(16,128), rho_k_thresh=200)
 
-v1 outer-polygon classifier: point-in-polygon vs the alpha-shape outer boundary
-on the FOV-augmented, multi-K-density-gated set, plus a `membrane_nm` band.
+Point-in-polygon vs the alpha-shape outer boundary on the FOV-augmented,
+multi-K-density-gated set, plus a `membrane_nm` band.
 """
-Base.@kwdef struct OuterPolygonConfig <: AbstractPolygonConfig
+Base.@kwdef struct OuterPolygonConfig <: AbstractEdgeClassifyConfig
     alpha_nm::Float64          = 300.0
     membrane_nm::Float64       = 100.0
     reflect_radius_nm::Float64 = 1500.0
     fov_trunc_tol_nm::Float64  = 150.0
-    k_list::Vector{Int}        = [16, 128]
+    k_list::Tuple{Vararg{Int}} = (16, 128)   # immutable → provenance-safe
     rho_k_thresh::Float64      = 200.0
-end
-
-"""
-    GridHybridConfig(; <OuterPolygon fields>, grid_px_nm=50, grid_smooth_nm=80,
-                     grid_mask_q=0.03, grid_mask_peak_frac=0.26, grid_outer_buffer_nm=800)
-
-Outer-polygon topology + a density-grid post-pass that promotes interior emitters
-near the boundary to `membrane`. Never changes `outside`.
-"""
-Base.@kwdef struct GridHybridConfig <: AbstractPolygonConfig
-    alpha_nm::Float64             = 300.0
-    membrane_nm::Float64          = 100.0
-    reflect_radius_nm::Float64    = 1500.0
-    fov_trunc_tol_nm::Float64     = 150.0
-    k_list::Vector{Int}           = [16, 128]
-    rho_k_thresh::Float64         = 200.0
-    grid_px_nm::Float64           = 50.0
-    grid_smooth_nm::Float64       = 80.0
-    grid_mask_q::Float64          = 0.03
-    grid_mask_peak_frac::Float64  = 0.26
-    grid_outer_buffer_nm::Float64 = 800.0
-end
-
-"""
-    MaskCarveConfig(; <OuterPolygon fields>, sigma_um=0.08, k_noise=3.0,
-                    pixel_um=0.04, min_component_frac=0.05, fill_hole_max_um2=0.5)
-
-Outer-polygon, but the effective classification polygon is a density-mask carve of
-v1 (carve ⊆ v1; never expands outward).
-"""
-Base.@kwdef struct MaskCarveConfig <: AbstractPolygonConfig
-    alpha_nm::Float64           = 300.0
-    membrane_nm::Float64        = 100.0
-    reflect_radius_nm::Float64  = 1500.0
-    fov_trunc_tol_nm::Float64   = 150.0
-    k_list::Vector{Int}         = [16, 128]
-    rho_k_thresh::Float64       = 200.0
-    sigma_um::Float64           = 0.080
-    k_noise::Float64            = 3.0
-    pixel_um::Float64           = 0.040
-    min_component_frac::Float64 = 0.05
-    fill_hole_max_um2::Float64  = 0.5
 end
 
 """
     KdeValleyConfig(; alpha_nm=600, membrane_nm=100, reflect_radius_nm=1500,
                     fov_trunc_tol_nm=150, sigma_nm=150, ...)
 
-Validated adaptive dSTORM gate (genmab): continuous Gaussian-KDE density +
-background/cell valley threshold + footprint fill, then the outer-polygon geometry
-on the footprint subset, then ray-cast enclosure reclass folding enclosed
-background into `interior`. Per-FOV adaptive — no per-cell density tuning.
-Defaults reproduce the A431 dSTORM validated set; `alpha_nm = 600` is the
-validated value (not the polygon-family default 300).
+Validated adaptive dSTORM gate (genmab). `alpha_nm = 600` is the validated value
+(not the polygon default 300); each field carries its own validated default, so a
+bare `KdeValleyConfig()` is correct.
 """
 Base.@kwdef struct KdeValleyConfig <: AbstractEdgeClassifyConfig
     alpha_nm::Float64          = 600.0
@@ -113,34 +67,17 @@ function _validate_geom(c::AbstractEdgeClassifyConfig)
     return nothing
 end
 
-function _validate_polygon_gate(c::AbstractPolygonConfig)
+# Fallback: an unsupported config subtype gets the clear "use a concrete config"
+# error here (validate runs before dispatch), mirroring cluster()'s fallback.
+validate(c::AbstractEdgeClassifyConfig) =
+    error("classify_emitters has no method for config type $(typeof(c)); " *
+          "use a concrete config: OuterPolygonConfig or KdeValleyConfig.")
+
+function validate(c::OuterPolygonConfig)
+    _validate_geom(c)
     isempty(c.k_list) && throw(ArgumentError("k_list must be non-empty"))
     all(>(0), c.k_list) || throw(ArgumentError("k_list entries must be > 0; got $(c.k_list)"))
     c.rho_k_thresh >= 0 || throw(ArgumentError("rho_k_thresh must be >= 0; got $(c.rho_k_thresh)"))
-    return nothing
-end
-
-function validate(c::OuterPolygonConfig)
-    _validate_geom(c); _validate_polygon_gate(c); return nothing
-end
-
-function validate(c::GridHybridConfig)
-    _validate_geom(c); _validate_polygon_gate(c)
-    c.grid_px_nm > 0     || throw(ArgumentError("grid_px_nm must be > 0; got $(c.grid_px_nm)"))
-    c.grid_smooth_nm > 0 || throw(ArgumentError("grid_smooth_nm must be > 0; got $(c.grid_smooth_nm)"))
-    (0 <= c.grid_mask_q <= 1)         || throw(ArgumentError("grid_mask_q must be in [0,1]; got $(c.grid_mask_q)"))
-    (0 <= c.grid_mask_peak_frac <= 1) || throw(ArgumentError("grid_mask_peak_frac must be in [0,1]; got $(c.grid_mask_peak_frac)"))
-    c.grid_outer_buffer_nm >= 0       || throw(ArgumentError("grid_outer_buffer_nm must be >= 0; got $(c.grid_outer_buffer_nm)"))
-    return nothing
-end
-
-function validate(c::MaskCarveConfig)
-    _validate_geom(c); _validate_polygon_gate(c)
-    c.sigma_um > 0            || throw(ArgumentError("sigma_um must be > 0; got $(c.sigma_um)"))
-    c.k_noise > 0             || throw(ArgumentError("k_noise must be > 0; got $(c.k_noise)"))
-    c.pixel_um > 0            || throw(ArgumentError("pixel_um must be > 0; got $(c.pixel_um)"))
-    c.min_component_frac >= 0 || throw(ArgumentError("min_component_frac must be >= 0; got $(c.min_component_frac)"))
-    c.fill_hole_max_um2 >= 0  || throw(ArgumentError("fill_hole_max_um2 must be >= 0; got $(c.fill_hole_max_um2)"))
     return nothing
 end
 
@@ -161,19 +98,13 @@ end
 # ---- traits ------------------------------------------------------------------
 
 method_name(::OuterPolygonConfig) = "outer_polygon"
-method_name(::GridHybridConfig)   = "grid_hybrid"
-method_name(::MaskCarveConfig)     = "mask_carve"
-method_name(::KdeValleyConfig)     = "kde_valley"
+method_name(::KdeValleyConfig)    = "kde_valley"
 
-# Density threshold for the loop-diagnostic `frac_dense` column. The polygon
-# family uses its tissue gate; kde_valley gates by KDE valley (not rho_k), so
-# frac_dense is reported against 0 (fraction of vertices with positive density).
-_diag_density_thresh(c::AbstractPolygonConfig) = c.rho_k_thresh
-_diag_density_thresh(::KdeValleyConfig)        = 0.0
+# Density threshold for the loop-diagnostic `frac_dense` column (OuterPolygonConfig
+# only; kde runs the polygon core on a footprint subset via an OuterPolygonConfig).
+_diag_density_thresh(c::OuterPolygonConfig) = c.rho_k_thresh
 
 # Serialization: UPPERCASE on-disk param dict + the write-only METHOD wire value.
-# Each config records only the fields that actually ran (fixes the v1 wart where
-# a kde_valley run logged inert rho_k_thresh/k_list).
 function _geom_dict(c::AbstractEdgeClassifyConfig)
     return Dict{String,Any}(
         "METHOD"            => method_name(c),
@@ -188,30 +119,6 @@ function to_dict(c::OuterPolygonConfig)
     d = _geom_dict(c)
     d["K_LIST"] = collect(Int, c.k_list)
     d["RHO_K_THRESH"] = c.rho_k_thresh
-    return d
-end
-
-function to_dict(c::GridHybridConfig)
-    d = _geom_dict(c)
-    d["K_LIST"] = collect(Int, c.k_list)
-    d["RHO_K_THRESH"] = c.rho_k_thresh
-    d["GRID_PX_NM"] = c.grid_px_nm
-    d["GRID_SMOOTH_NM"] = c.grid_smooth_nm
-    d["GRID_MASK_Q"] = c.grid_mask_q
-    d["GRID_MASK_PEAK_FRAC"] = c.grid_mask_peak_frac
-    d["GRID_OUTER_BUFFER_NM"] = c.grid_outer_buffer_nm
-    return d
-end
-
-function to_dict(c::MaskCarveConfig)
-    d = _geom_dict(c)
-    d["K_LIST"] = collect(Int, c.k_list)
-    d["RHO_K_THRESH"] = c.rho_k_thresh
-    d["MASK_CARVE_SIGMA_UM"] = c.sigma_um
-    d["MASK_CARVE_K_NOISE"] = c.k_noise
-    d["MASK_CARVE_PIXEL_UM"] = c.pixel_um
-    d["MASK_CARVE_MIN_COMPONENT_FRAC"] = c.min_component_frac
-    d["MASK_CARVE_FILL_HOLE_MAX_UM2"] = c.fill_hole_max_um2
     return d
 end
 

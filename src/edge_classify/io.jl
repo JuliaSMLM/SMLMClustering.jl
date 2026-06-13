@@ -15,21 +15,10 @@ function _json_write(io::IO, v; indent::Int=0)
     elseif v isa Integer
         print(io, v)
     elseif v isa AbstractFloat
-        if isfinite(v)
-            print(io, v)
-        else
-            print(io, "null")
-        end
+        print(io, isfinite(v) ? v : "null")
     elseif v isa AbstractString
         _json_write_string(io, v)
-    elseif v isa AbstractVector
-        print(io, "[")
-        for (i, x) in enumerate(v)
-            i > 1 && print(io, ", ")
-            _json_write(io, x; indent = indent)
-        end
-        print(io, "]")
-    elseif v isa Tuple
+    elseif v isa AbstractVector || v isa Tuple
         print(io, "[")
         for (i, x) in enumerate(v)
             i > 1 && print(io, ", ")
@@ -88,8 +77,6 @@ const _SCHEMA_VERSION_LOOP_DIAGNOSTICS = 2
 # fields that ran), produced by `to_dict`.
 const _SCHEMA_VERSION_PARAMS = 2
 const _SCHEMA_VERSION_MANIFEST = 1
-const _SCHEMA_VERSION_EFFECTIVE_OUTER = 1
-const _SCHEMA_VERSION_MASK_CARVE_DIAGNOSTIC = 1
 
 # ---------- artifact writers --------------------------------------------------
 
@@ -152,52 +139,6 @@ function _write_loop_diagnostics_csv(path::AbstractString, info::EdgeClassifyInf
     end
 end
 
-function _write_effective_outer_tsv(path::AbstractString, info::EdgeClassifyInfo)
-    open(path, "w") do io
-        println(io, "# schema_version: ", _SCHEMA_VERSION_EFFECTIVE_OUTER)
-        println(io, "# method: ", method_name(info.config))
-        println(io, "# vertex_count: ", length(info.outer_polygon))
-        println(io, "vertex_id\tx_um\ty_um\tmethod")
-        for (vid, (vx, vy)) in enumerate(info.outer_polygon)
-            println(io, vid, "\t",
-                    round(vx; digits=6), "\t",
-                    round(vy; digits=6), "\t",
-                    method_name(info.config))
-        end
-    end
-end
-
-function _write_mask_carve_diagnostic_json(path::AbstractString, info::EdgeClassifyInfo)
-    diag = info.mask_carve_diagnostic
-    payload = Dict{String,Any}(
-        "schema_version"             => _SCHEMA_VERSION_MASK_CARVE_DIAGNOSTIC,
-        "method"                     => "mask_carve",
-        "applied"                    => diag.applied,
-        "fallback_reason"            => diag.fallback_reason,
-        "params"                     => Dict{String,Any}(
-            "MASK_CARVE_SIGMA_UM"           => diag.sigma_um,
-            "MASK_CARVE_K_NOISE"            => diag.k_noise,
-            "MASK_CARVE_PIXEL_UM"           => diag.pixel_um,
-            "MASK_CARVE_MIN_COMPONENT_FRAC" => diag.min_component_frac,
-            "MASK_CARVE_FILL_HOLE_MAX_UM2"  => diag.fill_hole_max_um2,
-        ),
-        "v1_polygon_area_um2"        => diag.v1_polygon_area_um2,
-        "carve_polygon_area_um2"     => diag.carve_polygon_area_um2,
-        "area_delta_um2"             => diag.area_delta_um2,
-        "v1_only_area_um2"           => diag.v1_only_area_um2,
-        "carve_only_area_um2"        => diag.carve_only_area_um2,
-        "med_v1_carve_distance_um"   => diag.med_v1_carve_distance_um,
-        "p95_v1_carve_distance_um"   => diag.p95_v1_carve_distance_um,
-        "n_holes_filled"             => diag.n_holes_filled,
-        "n_holes_preserved"          => diag.n_holes_preserved,
-        "n_carve_polygon_pts"        => diag.n_carve_polygon_pts,
-    )
-    open(path, "w") do io
-        _json_write(io, payload; indent = 0)
-        println(io)
-    end
-end
-
 function _git_provenance(repo_root::AbstractString)
     sha = ""; clean = true
     try
@@ -246,9 +187,7 @@ end
 
 function _write_manifest_json(path::AbstractString, leaf_dir::AbstractString,
                               out_dir::AbstractString;
-                              condition::AbstractString, cell::AbstractString,
-                              renders_written::Bool,
-                              is_mask_carve::Bool, mask_carve_applied::Bool)
+                              condition::AbstractString, cell::AbstractString)
     artifacts = Dict{String,Any}(
         "classified_tsv"       => Dict{String,Any}("path" => "classified.tsv",
                                                     "schema_version" => _SCHEMA_VERSION_CLASSIFIED),
@@ -258,21 +197,6 @@ function _write_manifest_json(path::AbstractString, leaf_dir::AbstractString,
                                                     "schema_version" => _SCHEMA_VERSION_LOOP_DIAGNOSTICS),
         "params_json"          => Dict{String,Any}("path" => "params.json",
                                                     "schema_version" => _SCHEMA_VERSION_PARAMS),
-        "classified_png"       => Dict{String,Any}("path" => "classified.png",
-                                                    "written" => renders_written,
-                                                    "schema_version" => nothing),
-        "loop_overlay_png"     => Dict{String,Any}("path" => "loop_overlay.png",
-                                                    "written" => renders_written,
-                                                    "schema_version" => nothing),
-        "effective_outer_tsv"  => Dict{String,Any}(
-            "path" => "effective_outer.tsv",
-            "written" => is_mask_carve,
-            "schema_version" => is_mask_carve ? _SCHEMA_VERSION_EFFECTIVE_OUTER : nothing),
-        "mask_carve_diagnostic_json" => Dict{String,Any}(
-            "path" => "mask_carve_diagnostic.json",
-            "written" => is_mask_carve,
-            "applied" => mask_carve_applied,
-            "schema_version" => is_mask_carve ? _SCHEMA_VERSION_MASK_CARVE_DIAGNOSTIC : nothing),
     )
     payload = Dict{String,Any}(
         "schema_version" => _SCHEMA_VERSION_MANIFEST,
@@ -290,19 +214,18 @@ function _write_manifest_json(path::AbstractString, leaf_dir::AbstractString,
 end
 
 """
-    write_edge_artifacts(leaf, info::EdgeClassifyInfo, x_um, y_um;
-                         condition, cell, smld_input_meta=nothing, write_renders=false)
+    write_edge_artifacts(leaf, info::EdgeClassifyInfo, x_um, y_um; condition, cell,
+                         smld_input_meta=nothing)
 
 Write the diagnostic artifact set (`classified.tsv`, `polygon_loops.tsv`,
-`loop_diagnostics.csv`, `params.json`, `manifest.json`, plus `effective_outer.tsv`
-/ `mask_carve_diagnostic.json` for `MaskCarveConfig`) into `leaf`. `x_um`/`y_um`
+`loop_diagnostics.csv`, `params.json`, `manifest.json`) into `leaf`. `x_um`/`y_um`
 are the original coordinates (the info does not retain them). Compute and IO are
 separate: `classify_emitters` does not write artifacts.
 """
 function write_edge_artifacts(leaf::AbstractString, info::EdgeClassifyInfo,
                               x_um::Vector{Float64}, y_um::Vector{Float64};
                               condition::AbstractString, cell::AbstractString,
-                              smld_input_meta = nothing, write_renders::Bool = false)
+                              smld_input_meta = nothing)
     mkpath(leaf)
     _write_classified_tsv(joinpath(leaf, "classified.tsv"), info, x_um, y_um;
                           condition = condition, cell = cell)
@@ -310,23 +233,8 @@ function write_edge_artifacts(leaf::AbstractString, info::EdgeClassifyInfo,
     _write_loop_diagnostics_csv(joinpath(leaf, "loop_diagnostics.csv"), info)
     _write_params_json(joinpath(leaf, "params.json"), info;
                        smld_input_meta = smld_input_meta)
-
-    is_mask_carve = info.config isa MaskCarveConfig
-    mask_carve_applied = false
-    if is_mask_carve
-        _write_effective_outer_tsv(joinpath(leaf, "effective_outer.tsv"), info)
-        if info.mask_carve_diagnostic !== nothing
-            _write_mask_carve_diagnostic_json(
-                joinpath(leaf, "mask_carve_diagnostic.json"), info)
-            mask_carve_applied = info.mask_carve_diagnostic.applied
-        end
-    end
-
     out_dir = dirname(dirname(leaf))
     _write_manifest_json(joinpath(leaf, "manifest.json"), leaf, out_dir;
-                         condition = condition, cell = cell,
-                         renders_written = false,
-                         is_mask_carve = is_mask_carve,
-                         mask_carve_applied = mask_carve_applied)
+                         condition = condition, cell = cell)
     return nothing
 end

@@ -132,3 +132,38 @@ function _kde_valley_footprint(x::Vector{Float64}, y::Vector{Float64},
                            bin = cfg.footprint_bin_um,
                            closing = cfg.footprint_closing_px)
 end
+
+# Stage 3 of kde_valley: enclosure reclass. A background (:outside) point ENCLOSED
+# by the cell (≥ enclosure_min_hits of 8 rays hit cell tissue before the field
+# edge) is folded into :interior. Mutates `class` in place; only :outside → :interior.
+function _enclosure_fill!(class::Vector{Symbol}, xs::Vector{Float64},
+                          ys::Vector{Float64}, cfg::KdeValleyConfig)
+    bin = cfg.enclosure_bin_um
+    min_hits = cfg.enclosure_min_hits
+    N = length(class)
+    x0, x1 = extrema(xs); y0, y1 = extrema(ys)
+    nx = max(1, ceil(Int, (x1 - x0) / bin) + 1)
+    ny = max(1, ceil(Int, (y1 - y0) / bin) + 1)
+    bx(x) = clamp(floor(Int, (x - x0) / bin) + 1, 1, nx)
+    by(y) = clamp(floor(Int, (y - y0) / bin) + 1, 1, ny)
+    cell = falses(nx, ny)
+    for i in 1:N
+        (class[i] == :interior || class[i] == :membrane) &&
+            (cell[bx(xs[i]), by(ys[i])] = true)
+    end
+    dirs = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+    for i in 1:N
+        class[i] == :outside || continue
+        bi = bx(xs[i]); bj = by(ys[i]); hits = 0
+        for (dx, dy) in dirs
+            ci = bi; cj = bj
+            while true
+                ci += dx; cj += dy
+                (1 <= ci <= nx && 1 <= cj <= ny) || break
+                cell[ci, cj] && (hits += 1; break)
+            end
+        end
+        hits >= min_hits && (class[i] = :interior)
+    end
+    return class
+end

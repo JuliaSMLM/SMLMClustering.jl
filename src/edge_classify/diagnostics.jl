@@ -27,7 +27,7 @@ function _compute_loop_diagnostics(
     fxmin, fxmax, fymin, fymax = fov_um
     n_orig = length(x_um)
     tree = NearestNeighbors.KDTree(Xorig)
-    K = _DIAG_DENSITY_K
+    K = min(_DIAG_DENSITY_K, max(n_orig, 1))   # clamp so small clouds don't throw on knn
     inv_pi = 1 / π
 
     diags = Vector{LoopDiagnostic}(undef, length(loops))

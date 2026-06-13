@@ -52,13 +52,18 @@ function _knn_K_density(X::AbstractMatrix{Float64}, K::Int, tree)
     return rho
 end
 
-function _tissue_mask(X::Matrix{Float64}, K_list::AbstractVector{<:Integer},
-                      rho_thresh::Float64)
+# `k_list` is any iterable of integers (Tuple or Vector). An empty `k_list`
+# disables the gate (returns all-true, no k-NN) — used by the kde_valley path.
+# Each K is clamped to n_total-1 so small clouds don't throw on knn(K+1).
+function _tissue_mask(X::Matrix{Float64}, k_list, rho_thresh::Float64)
     n_total = size(X, 2)
+    (isempty(k_list) || n_total <= 1) && return trues(n_total)
     tree = NearestNeighbors.KDTree(X)
     mask = trues(n_total)
-    for K in K_list
-        rho = _knn_K_density(X, Int(K), tree)
+    for K in k_list
+        Keff = min(Int(K), n_total - 1)
+        Keff >= 1 || continue
+        rho = _knn_K_density(X, Keff, tree)
         @inbounds for i in 1:n_total
             rho[i] >= rho_thresh || (mask[i] = false)
         end
@@ -149,7 +154,7 @@ function _alpha_shape_loops(X::Matrix{Float64}, alpha_um::Float64)
     boundary = Tuple{Int,Int}[(e[1], e[2]) for (e, c) in edge_count if c == 1]
     loop_idx = _trace_boundary_loops(boundary)
     polys = [[points[v] for v in idx] for idx in loop_idx]
-    sort!(polys; by = p -> -abs(_polygon_area(p)))
+    sort!(polys; by = p -> -abs(_polygon_area(p)), alg = MergeSort)  # stable → reproducible loop order
     return polys
 end
 
