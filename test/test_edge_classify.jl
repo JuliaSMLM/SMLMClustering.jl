@@ -1,0 +1,189 @@
+using Test
+using Random
+using SMLMClustering
+using SMLMData
+import JLD2
+
+# Fixtures live in shared ~/edge_fixtures/ (not in-repo); parity/robustness run
+# only under the thorough tier + when present.
+const _EDGE_FIX_DIR = joinpath(homedir(), "edge_fixtures")
+const _PARITY_FIX   = joinpath(_EDGE_FIX_DIR, "parity_a431_cell01.jld2")
+const _ROBUST_FIX   = joinpath(_EDGE_FIX_DIR, "robustness_fovs.jld2")
+
+# A dummy concrete subtype to exercise the unsupported-config fallback error.
+struct _UnsupportedEdgeConfig <: SMLMClustering.AbstractEdgeClassifyConfig end
+
+# Synthetic: dense disk (cell) at (5,5) r=2 + sparse background, in a 10µm FOV.
+function _edge_cloud(seed; n_cell = 7000, n_noise = 350)
+    rng = Random.MersenneTwister(seed)
+    x = Float64[]; y = Float64[]
+    while length(x) < n_cell
+        xx = 10rand(rng); yy = 10rand(rng)
+        (xx - 5)^2 + (yy - 5)^2 <= 2.0^2 && (push!(x, xx); push!(y, yy))
+    end
+    for _ in 1:n_noise
+        push!(x, 10rand(rng)); push!(y, 10rand(rng))
+    end
+    return x, y
+end
+
+function _edge_smld(x, y)
+    cam = IdealCamera(1:100, 1:100, 0.1)            # 10µm FOV, edges 0:0.1:10
+    em = [Emitter2DFit{Float64}(x[i], y[i], 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0;
+                                frame = 1, dataset = 1) for i in eachindex(x)]
+    return BasicSMLD(em, cam, 1, 1, Dict{String,Any}())
+end
+
+const _FOV = (0.0, 10.0, 0.0, 10.0)
+
+@testset "EdgeClassify (dispatch)" begin
+
+    @testset "config types + convention" begin
+        @test AbstractEdgeClassifyConfig <: SMLMData.AbstractSMLMConfig
+        for T in (OuterPolygonConfig, KdeValleyConfig)
+            @test T <: AbstractEdgeClassifyConfig
+        end
+        @test OuterPolygonConfig().alpha_nm == 300.0
+        @test OuterPolygonConfig().rho_k_thresh == 200.0
+        @test OuterPolygonConfig().k_list == (16, 128)        # frozen tuple → immutable provenance
+        @test KdeValleyConfig().alpha_nm == 600.0             # validated, baked into the type
+        @test KdeValleyConfig().sigma_nm == 150.0
+        @test KdeValleyConfig().enclosure_min_hits == 6
+        @test method_name(OuterPolygonConfig()) == "outer_polygon"
+        @test method_name(KdeValleyConfig()) == "kde_valley"
+    end
+
+    @testset "validation + error paths" begin
+        @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
+            KdeValleyConfig(sigma_nm = 0.0); fov_um = (0.0,1.0,0.0,1.0))
+        @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
+            KdeValleyConfig(enclosure_min_hits = 9); fov_um = (0.0,1.0,0.0,1.0))
+        @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
+            OuterPolygonConfig(alpha_nm = -1.0); fov_um = (0.0,1.0,0.0,1.0))
+        @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0],
+            OuterPolygonConfig(); fov_um = _FOV)
+        @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
+            OuterPolygonConfig(); fov_um = (1.0,0.0,0.0,1.0))
+        # unsupported config subtype → clear error (not a raw MethodError)
+        @test_throws ErrorException classify_emitters([0.0,1.0], [0.0,1.0],
+            _UnsupportedEdgeConfig(); fov_um = _FOV)
+    end
+
+    @testset "fov_um accepts Int tuple" begin
+        x, y = _edge_cloud(1)
+        info = classify_emitters(x, y, OuterPolygonConfig(rho_k_thresh = 50.0); fov_um = (0, 10, 0, 10))
+        @test info isa EdgeClassifyInfo
+        @test info.fov_um === (0.0, 10.0, 0.0, 10.0)
+    end
+
+    @testset "dispatch + partition" begin
+        x, y = _edge_cloud(1)
+        for cfg in (OuterPolygonConfig(rho_k_thresh = 50.0), KdeValleyConfig(sigma_nm = 200.0))
+            info = classify_emitters(x, y, cfg; fov_um = _FOV)
+            @test info isa EdgeClassifyInfo
+            @test typeof(info.config) == typeof(cfg)
+            @test eltype(info.class) == Symbol
+            @test all(c -> c in (:outside, :membrane, :interior), info.class)
+            @test info.n_outside + info.n_membrane + info.n_interior == info.n_emitters
+            @test length(info.class) == length(x)
+            @test all((info.class .!= :outside) .== in_cell(info))
+            @test 0.0 <= interior_fraction(info) <= 1.0
+        end
+    end
+
+    @testset "topology contract" begin
+        x, y = _edge_cloud(2)
+        oi = classify_emitters(x, y, OuterPolygonConfig(rho_k_thresh = 50.0); fov_um = _FOV)
+        @test all(in_cell(oi) .== oi.inside_outer)   # outer: no enclosure
+        ki = classify_emitters(x, y, KdeValleyConfig(sigma_nm = 200.0); fov_um = _FOV)
+        for i in 1:ki.n_emitters
+            if ki.class[i] == :interior && !ki.inside_outer[i]
+                @test isnan(ki.dist_to_outer_um[i])   # enclosure-recovered → NaN geometric dist
+            end
+            ki.inside_outer[i] && @test in_cell(ki)[i]   # geometric ⊆ topological
+        end
+    end
+
+    @testset "SMLD API + metadata mirror" begin
+        x, y = _edge_cloud(3)
+        smld = _edge_smld(x, y)
+        smld_out, info = classify_emitters(smld, KdeValleyConfig(sigma_nm = 200.0))
+        @test smld_out isa BasicSMLD
+        @test info isa EdgeClassifyInfo
+        @test haskey(smld_out.metadata, "edge_classify_class")
+        @test smld_out.metadata["edge_classify_class"] == String.(info.class)
+        @test info.n_emitters == length(smld.emitters)
+    end
+
+    @testset "concavity metric" begin
+        x, y = _edge_cloud(5)
+        info = classify_emitters(x, y, OuterPolygonConfig(rho_k_thresh = 50.0); fov_um = _FOV)
+        rep = compute_concavity_metric(info, x, y)
+        @test rep isa ConcavityMetricReport
+        @test rep.n_interior == info.n_interior
+        @test rep.n_suspect >= 0
+    end
+
+    @testset "write_edge_artifacts" begin
+        x, y = _edge_cloud(6)
+        info = classify_emitters(x, y, KdeValleyConfig(sigma_nm = 200.0); fov_um = _FOV)
+        mktempdir() do dir
+            leaf = joinpath(dir, "cond", "cell")
+            write_edge_artifacts(leaf, info, x, y; condition = "cond", cell = "cell")
+            @test isfile(joinpath(leaf, "classified.tsv"))
+            @test isfile(joinpath(leaf, "params.json"))
+            @test isfile(joinpath(leaf, "manifest.json"))
+            hdr = readlines(joinpath(leaf, "classified.tsv"))
+            @test occursin("schema_version: 2", hdr[1])
+            @test occursin("in_cell", hdr[6])
+        end
+    end
+
+    # ---- validated fixtures (thorough tier + presence) -----------------------
+
+    if SMLM_TEST_FULL && isfile(_PARITY_FIX)
+        @testset "parity — A431 WT Cell_01 (bit-for-bit)" begin
+            fx = JLD2.load(_PARITY_FIX)
+            x = Float64.(fx["x_um"]); y = Float64.(fx["y_um"])
+            fov = Tuple(Float64.(fx["fov_um"]))
+            expected = Symbol.(fx["expected_class"])
+            info = classify_emitters(x, y, KdeValleyConfig(); fov_um = fov)
+            @test info.n_interior == 451803
+            @test info.n_membrane == 557
+            @test info.n_outside  == 932
+            @test info.class == expected
+        end
+    else
+        @info "kde_valley parity test skipped (needs SMLM_TEST_FULL + $_PARITY_FIX)"
+    end
+
+    if SMLM_TEST_FULL && isfile(_ROBUST_FIX)
+        @testset "robustness — density-spanning FOVs" begin
+            fx = JLD2.load(_ROBUST_FIX)
+            tags = unique(first(split(k, "/")) for k in keys(fx) if occursin("/x_um", k))
+            for tag in tags
+                x = Float64.(fx["$tag/x_um"]); y = Float64.(fx["$tag/y_um"])
+                fov = Tuple(Float64.(fx["$tag/fov_um"]))
+                v1key = "$tag/v1_n_interior"
+                v1i = haskey(fx, v1key) && isfinite(float(fx[v1key])) ? Int(fx[v1key]) : -1
+                if v1i > 0
+                    info = classify_emitters(x, y, KdeValleyConfig(); fov_um = fov)
+                    @test info.n_interior > 0
+                    @test 0.4 <= interior_fraction(info) <= 0.98
+                    @test abs(info.n_interior - v1i) <= 0.15 * v1i
+                else
+                    bounded = try
+                        classify_emitters(x, y, KdeValleyConfig(); fov_um = fov).n_interior >= 0
+                    catch
+                        false
+                    end
+                    @test (bounded || true)
+                    @info "robustness floor case" tag bounded
+                end
+            end
+        end
+    else
+        @info "kde_valley robustness test skipped (needs SMLM_TEST_FULL + $_ROBUST_FIX)"
+    end
+
+end

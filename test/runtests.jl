@@ -52,6 +52,7 @@ struct _DummyClusterCfg <: AbstractClusterConfig end
     include("test_local_contrast.jl")
     include("test_mrf_density.jl")
     include("test_point_hysteresis.jl")
+    include("test_edge_classify.jl")
 
 end
 

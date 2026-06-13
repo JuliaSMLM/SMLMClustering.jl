@@ -14,6 +14,7 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Edge Classification" => "edge_classify.md",
     ],
 )
 

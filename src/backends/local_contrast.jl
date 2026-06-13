@@ -86,8 +86,7 @@ support = isfinite.(contrast) .& (contrast .> -0.05) .& (fine .> fine_floor)
                                           graph_k=12, min_points=150)
 ```
 
-See also: [`AbstractStatisticsConfig`](@ref), [`ClusterStatisticsInfo`](@ref),
-[`point_hysteresis_clusters`](@ref).
+See also: [`AbstractStatisticsConfig`](@ref), [`ClusterStatisticsInfo`](@ref).
 """
 Base.@kwdef struct LocalContrastFeature <: AbstractStatisticsConfig
     density_k::Int = 200

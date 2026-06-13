@@ -10,5 +10,5 @@ Documentation for [SMLMClustering](https://github.com/JuliaSMLM/SMLMClustering.j
 ```
 
 ```@autodocs
-Modules = [SMLMClustering]
+Modules = [SMLMClustering, SMLMClustering.EdgeClassify]
 ```

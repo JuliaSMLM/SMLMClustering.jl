@@ -3,7 +3,7 @@
 Clustering and spatial-statistic backends for single-molecule localization
 microscopy (SMLM) data.
 
-Provides two parallel entry points over `SMLMData.BasicSMLD`:
+Provides three parallel entry points over `SMLMData.BasicSMLD`:
 
 - **`cluster`** — labeling backends (DBSCAN, Voronoi-tessellation /
   SR-Tesseler-style, agglomerative hierarchical) that assign cluster ids to
@@ -11,6 +11,9 @@ Provides two parallel entry points over `SMLMData.BasicSMLD`:
 - **`cluster_statistics`** — read-only spatial-statistic backends (Hopkins
   clustering tendency, Voronoi per-emitter density, ...) that compute
   summary scalars / vectors.
+- **`classify_emitters`** — edge / membrane / interior classification
+  (`OuterPolygonConfig`, and the validated adaptive `KdeValleyConfig`) labeling
+  each emitter `:outside` / `:membrane` / `:interior`.
 
 ## Entry points
 
@@ -20,6 +23,9 @@ Provides two parallel entry points over `SMLMData.BasicSMLD`:
 
 # Read-only spatial statistics
 (smld_passthrough, stats_info) = cluster_statistics(smld, stats_cfg)
+
+# Edge / membrane / interior classification
+(smld_passthrough, edge_info) = classify_emitters(smld, KdeValleyConfig())
 ```
 
 `cluster()` is **non-mutating**: input emitters are deep-copied, cluster labels
@@ -32,6 +38,12 @@ emitters.
 as input (no allocation, no mutation) alongside a
 `ClusterStatisticsInfo` summary. The two-tuple shape is preserved for ecosystem
 symmetry, but callers should treat the first element as the unmodified input.
+
+`classify_emitters()` is likewise pass-through: the per-emitter class is mirrored
+into `smld.metadata["edge_classify_class"]`, and `info::EdgeClassifyInfo` carries
+`class::Vector{Symbol}` (`:outside` / `:membrane` / `:interior`) plus the boundary
+geometry. The concrete config type selects the strategy by dispatch. See the
+[edge-classification docs](docs/src/edge_classify.md).
 
 ## Backends
 

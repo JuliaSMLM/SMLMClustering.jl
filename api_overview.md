@@ -407,3 +407,72 @@ HopkinsConfig(n_samples=50, random_repeats=10, seed=1)
 VoronoiDensityConfig()
 VoronoiDensityConfig(per_dataset=false)
 ```
+
+## Sibling entry point — `classify_emitters`
+
+`classify_emitters(smld, cfg) -> (smld, EdgeClassifyInfo)` is a third **read-only**
+sibling (alongside `cluster` / `cluster_statistics`) that classifies each emitter as
+`:outside` / `:membrane` / `:interior`. The concrete config type selects the strategy
+by dispatch. The coordinate form `classify_emitters(x_um, y_um, cfg; fov_um) ->
+EdgeClassifyInfo` is the core; the SMLD form mirrors the class into
+`smld.metadata["edge_classify_class"]` (`Vector{String}`) and returns the smld
+pass-through. Artifact writing is a separate step:
+`write_edge_artifacts(leaf, info, x_um, y_um; condition, cell)`.
+
+### `AbstractEdgeClassifyConfig <: SMLMData.AbstractSMLMConfig`
+
+Abstract supertype; each strategy is a concrete subtype dispatched as a
+`classify_emitters` method. Shared geometry fields on every subtype:
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `alpha_nm` | `Float64` | 300 (kde: 600) | alpha-shape circumradius |
+| `membrane_nm` | `Float64` | 100 | membrane band width (nm) |
+| `reflect_radius_nm` | `Float64` | 1500 | FOV-reflection band (nm) |
+| `fov_trunc_tol_nm` | `Float64` | 150 | FOV-truncation tolerance (nm) |
+
+### `EdgeClassifyInfo <: SMLMData.AbstractSMLMInfo`
+
+**Source:** `src/edge_classify/info.jl`
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `class` | `Vector{Symbol}` | authoritative per-emitter class (`:outside`/`:membrane`/`:interior`) |
+| `inside_outer` | `BitVector` | **geometric** containment in the alpha outer loop |
+| `dist_to_outer_um` | `Vector{Float64}` | distance to the outer polygon; `NaN` if not inside |
+| `outer_polygon`, `loops`, `loop_diagnostics` | — | boundary geometry + per-loop diagnostics |
+| `config` | concrete config | provenance |
+| `n_outside` / `n_membrane` / `n_interior` | `Int` | class counts |
+
+Accessors: `in_cell(info)` (= `class .!= :outside`), `interior_fraction(info)`.
+**Filter on `class`, never `inside_outer`.** For `KdeValleyConfig` the enclosure stage
+folds enclosed background into `:interior` while `inside_outer` stays geometric, so the
+enclosure-recovered set is exactly `class == :interior && inside_outer == false`.
+
+### `OuterPolygonConfig <: AbstractEdgeClassifyConfig`
+
+**Source:** `src/edge_classify/classify.jl`
+**Algorithm:** FOV-reflect → multi-K k-NN density gate → alpha-shape outer loop → point-in-polygon + membrane band
+**Library:** NearestNeighbors.jl, DelaunayTriangulation.jl
+
+**Extra fields:** `k_list::Tuple{Vararg{Int}}` = `(16, 128)`; `rho_k_thresh::Float64` = `200` (µm⁻²).
+
+**Constructor:**
+```julia
+OuterPolygonConfig()
+OuterPolygonConfig(alpha_nm=400.0, rho_k_thresh=50.0)
+```
+
+### `KdeValleyConfig <: AbstractEdgeClassifyConfig`
+
+**Source:** `src/edge_classify/classify.jl` + `src/edge_classify/gates.jl`
+**Algorithm:** Gaussian-KDE density → background/cell valley threshold → footprint fill → outer-polygon geometry on the footprint subset → 8-ray enclosure reclass. Validated adaptive dSTORM gate; per-FOV adaptive (no per-cell density tuning).
+**Library:** NearestNeighbors.jl, DelaunayTriangulation.jl, Statistics
+
+**Extra fields:** `sigma_nm`=150, `rmax_sigma`=3.0, `valley_nbins`=140, `valley_floorfrac`=0.05, `valley_smooth`=4, `footprint_bin_um`=0.2, `footprint_closing_px`=3, `enclosure_bin_um`=0.2, `enclosure_min_hits`=6. Defaults reproduce the validated A431 dSTORM set (note `alpha_nm`=600).
+
+**Constructor:**
+```julia
+KdeValleyConfig()                       # validated A431 defaults
+KdeValleyConfig(sigma_nm=120.0)
+```
