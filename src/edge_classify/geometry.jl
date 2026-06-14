@@ -138,13 +138,13 @@ entries are interior / hole / reflection-space loops.
 function _alpha_shape_loops(X::Matrix{Float64}, alpha_um::Float64)
     n = size(X, 2)
     points = [(X[1, i], X[2, i]) for i in 1:n]
-    tri = DelaunayTriangulation.triangulate(points)
+    triangles = _delaunay_triangles(X)
+    # Degenerate guard: <3 distinct points (or all-collinear) ⇒ no triangles ⇒
+    # empty loops; the caller raises a clean error.
+    isempty(triangles) && return Vector{Vector{NTuple{2,Float64}}}()
     edge_count = Dict{Tuple{Int,Int}, Int}()
-    for T in DelaunayTriangulation.each_solid_triangle(tri)
-        i, j, k = DelaunayTriangulation.triangle_vertices(T)
-        p1 = DelaunayTriangulation.get_point(tri, i)
-        p2 = DelaunayTriangulation.get_point(tri, j)
-        p3 = DelaunayTriangulation.get_point(tri, k)
+    for (i, j, k) in triangles
+        p1 = points[i]; p2 = points[j]; p3 = points[k]
         _circumradius(p1, p2, p3) <= alpha_um || continue
         for (a, b) in ((i, j), (j, k), (k, i))
             e = a < b ? (a, b) : (b, a)
@@ -154,7 +154,10 @@ function _alpha_shape_loops(X::Matrix{Float64}, alpha_um::Float64)
     boundary = Tuple{Int,Int}[(e[1], e[2]) for (e, c) in edge_count if c == 1]
     loop_idx = _trace_boundary_loops(boundary)
     polys = [[points[v] for v in idx] for idx in loop_idx]
-    sort!(polys; by = p -> -abs(_polygon_area(p)), alg = MergeSort)  # stable → reproducible loop order
+    # Descending |area|, tie-broken by the lexicographically smallest vertex so
+    # equal-area loops cannot reorder across runs / Julia versions (loops[1] must
+    # be deterministic — the caller classifies against it).
+    sort!(polys; by = p -> (-abs(_polygon_area(p)), minimum(p)), alg = MergeSort)
     return polys
 end
 
