@@ -16,7 +16,7 @@ Strategies:
 module EdgeClassify
 
 using NearestNeighbors
-using DelaunayTriangulation
+using AdaptivePredicates
 using Statistics
 using Dates
 import SMLMData
@@ -31,6 +31,7 @@ export classify_emitters,
 
 include("configs.jl")
 include("info.jl")
+include("delaunay.jl")
 include("geometry.jl")
 include("gates.jl")
 include("diagnostics.jl")

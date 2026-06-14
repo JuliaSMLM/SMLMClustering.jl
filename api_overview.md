@@ -272,7 +272,8 @@ run after FrameConnect / BaGoL (which use `track_id`, leaving `id` free).
 | `SMLMData` | `BasicSMLD`, emitter types, `AbstractSMLMConfig`, `AbstractSMLMInfo` |
 | `Clustering` | `dbscan`, `hclust`, `cutree` |
 | `Distances` | `pairwise(Euclidean(), X; dims=2)` for hierarchical distance matrix |
-| `DelaunayTriangulation` | Voronoi tessellation and Delaunay adjacency |
+| `DelaunayTriangulation` | Voronoi tessellation and Delaunay adjacency (Voronoi/MRF backends) |
+| `AdaptivePredicates` | Exact geometric predicates for EdgeClassify's built-in alpha-shape Delaunay |
 | `NearestNeighbors` | KDTree NN queries for the Hopkins backend |
 | `Random` | Seeded RNG (`Xoshiro`) for reproducible Hopkins repeats |
 | `Statistics` | `median` for the Voronoi-density summary statistic |
@@ -453,7 +454,7 @@ enclosure-recovered set is exactly `class == :interior && inside_outer == false`
 
 **Source:** `src/edge_classify/classify.jl`
 **Algorithm:** FOV-reflect → multi-K k-NN density gate → alpha-shape outer loop → point-in-polygon + membrane band
-**Library:** NearestNeighbors.jl, DelaunayTriangulation.jl
+**Library:** NearestNeighbors.jl, AdaptivePredicates.jl (built-in pure-Julia Delaunay)
 
 **Extra fields:** `k_list::Tuple{Vararg{Int}}` = `(16, 128)`; `rho_k_thresh::Float64` = `200` (µm⁻²).
 
@@ -467,7 +468,7 @@ OuterPolygonConfig(alpha_nm=400.0, rho_k_thresh=50.0)
 
 **Source:** `src/edge_classify/classify.jl` + `src/edge_classify/gates.jl`
 **Algorithm:** Gaussian-KDE density → background/cell valley threshold → footprint fill → outer-polygon geometry on the footprint subset → 8-ray enclosure reclass. Validated adaptive dSTORM gate; per-FOV adaptive (no per-cell density tuning).
-**Library:** NearestNeighbors.jl, DelaunayTriangulation.jl, Statistics
+**Library:** NearestNeighbors.jl, AdaptivePredicates.jl (built-in pure-Julia Delaunay), Statistics
 
 **Extra fields:** `sigma_nm`=150, `rmax_sigma`=3.0, `valley_nbins`=140, `valley_floorfrac`=0.05, `valley_smooth`=4, `footprint_bin_um`=0.2, `footprint_closing_px`=3, `enclosure_bin_um`=0.2, `enclosure_min_hits`=6. Defaults reproduce the validated A431 dSTORM set (note `alpha_nm`=600).
 

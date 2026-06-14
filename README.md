@@ -311,5 +311,6 @@ Pkg.add(url="https://github.com/JuliaSMLM/SMLMClustering.jl")
 - [SMLMData.jl](https://github.com/JuliaSMLM/SMLMData.jl) — emitter types and SMLD container
 - [Clustering.jl](https://github.com/JuliaStats/Clustering.jl) — DBSCAN and hierarchical clustering
 - [Distances.jl](https://github.com/JuliaStats/Distances.jl) — pairwise distance matrix
-- [DelaunayTriangulation.jl](https://github.com/JuliaGeometry/DelaunayTriangulation.jl) — Voronoi tessellation
+- [DelaunayTriangulation.jl](https://github.com/JuliaGeometry/DelaunayTriangulation.jl) — Voronoi tessellation (Voronoi/MRF backends)
+- [AdaptivePredicates.jl](https://github.com/JuliaGeometry/AdaptivePredicates.jl) — exact geometric predicates for EdgeClassify's built-in alpha-shape Delaunay
 - [NearestNeighbors.jl](https://github.com/KristofferC/NearestNeighbors.jl) — KDTree NN queries (Hopkins backend)

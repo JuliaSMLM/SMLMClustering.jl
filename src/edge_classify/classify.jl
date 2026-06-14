@@ -62,6 +62,10 @@ function _classify_polygon(x::Vector{Float64}, y::Vector{Float64},
     tmask = _tissue_mask(Xfull, cfg.k_list, cfg.rho_k_thresh)
     Xc = Xfull[:, findall(tmask)]
     loops = _alpha_shape_loops(Xc, cfg.alpha_nm / 1000)
+    # Load-bearing: degenerate / too-sparse clouds (<3 distinct points, collinear,
+    # or no alpha-connected boundary) yield empty loops — this is where the
+    # "too sparse to bound" error contract is enforced (the triangulation engine
+    # itself must never be relied on to throw; _alpha_shape_loops guards it).
     isempty(loops) && throw(ErrorException(
         "no boundary loops found at alpha_nm=$(cfg.alpha_nm); " *
         "check inputs or relax the alpha threshold"))
@@ -85,7 +89,7 @@ _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
 function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
                    cfg::KdeValleyConfig)
     n = length(x)
-    fp = _kde_valley_footprint(x, y, cfg)
+    fp = _kde_valley_footprint(x, y, cfg, fov)
     any(fp) || throw(ErrorException(
         "kde_valley: KDE-valley + footprint gate produced empty tissue " *
         "(sigma_nm=$(cfg.sigma_nm)); cloud too sparse or sigma too small"))
@@ -108,7 +112,7 @@ function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64
         dist[i] = r.dist[k]
     end
 
-    _enclosure_fill!(class, x, y, cfg)
+    _enclosure_fill!(class, x, y, cfg, fov)
 
     return (; class, inside_outer, dist, loops = r.loops, poly = r.poly,
             sides = r.sides, n_reflected = r.n_reflected, loop_diags = r.loop_diags)

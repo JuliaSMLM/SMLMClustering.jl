@@ -76,12 +76,24 @@ function _morph(g::AbstractMatrix{Bool}, r::Int, dilate::Bool)
     return out
 end
 
+# Raster extent: data extrema, but CLAMPED to the FOV expanded by one FOV-width.
+# A no-op for cells inside the field (extrema unchanged → bit-for-bit parity),
+# but caps a far-outlier localization from sizing the grid to tens of GB. Points
+# beyond the clamped range fall onto the edge bin (via the bx/by clamp below).
+function _raster_bounds(vs::AbstractVector{Float64}, lo_fov::Float64, hi_fov::Float64)
+    m = hi_fov - lo_fov
+    lo = lo_fov - m; hi = hi_fov + m
+    a, b = extrema(vs)
+    return clamp(a, lo, hi), clamp(b, lo, hi)
+end
+
 # Footprint of kept tissue: rasterize → dilate-seal thin necks → flood-fill
 # enclosed holes from the grid border. Returns a per-point in-footprint mask.
 function _footprint_fill(xs::Vector{Float64}, ys::Vector{Float64},
-                         tissue::AbstractVector{Bool}; bin::Float64 = 0.2,
-                         closing::Int = 3)
-    x0, x1 = extrema(xs); y0, y1 = extrema(ys)
+                         tissue::AbstractVector{Bool}, fov::NTuple{4,Float64};
+                         bin::Float64 = 0.2, closing::Int = 3)
+    x0, x1 = _raster_bounds(xs, fov[1], fov[2])
+    y0, y1 = _raster_bounds(ys, fov[3], fov[4])
     nx = max(1, ceil(Int, (x1 - x0) / bin) + 1)
     ny = max(1, ceil(Int, (y1 - y0) / bin) + 1)
     bx(x) = clamp(floor(Int, (x - x0) / bin) + 1, 1, nx)
@@ -114,7 +126,7 @@ end
 # Stages 1–2 of kde_valley: KDE-valley density gate + footprint fill on the
 # ORIGINAL cloud. Returns the per-point in-footprint mask handed to the polygon core.
 function _kde_valley_footprint(x::Vector{Float64}, y::Vector{Float64},
-                               cfg::KdeValleyConfig)
+                               cfg::KdeValleyConfig, fov::NTuple{4,Float64})
     n = length(x)
     X = Matrix{Float64}(undef, 2, n)
     @inbounds for i in 1:n
@@ -128,7 +140,7 @@ function _kde_valley_footprint(x::Vector{Float64}, y::Vector{Float64},
                                floorfrac = cfg.valley_floorfrac,
                                smooth = cfg.valley_smooth) - 1.0
     tissue = rho .>= rho_thr
-    return _footprint_fill(x, y, tissue;
+    return _footprint_fill(x, y, tissue, fov;
                            bin = cfg.footprint_bin_um,
                            closing = cfg.footprint_closing_px)
 end
@@ -137,11 +149,12 @@ end
 # by the cell (≥ enclosure_min_hits of 8 rays hit cell tissue before the field
 # edge) is folded into :interior. Mutates `class` in place; only :outside → :interior.
 function _enclosure_fill!(class::Vector{Symbol}, xs::Vector{Float64},
-                          ys::Vector{Float64}, cfg::KdeValleyConfig)
+                          ys::Vector{Float64}, cfg::KdeValleyConfig, fov::NTuple{4,Float64})
     bin = cfg.enclosure_bin_um
     min_hits = cfg.enclosure_min_hits
     N = length(class)
-    x0, x1 = extrema(xs); y0, y1 = extrema(ys)
+    x0, x1 = _raster_bounds(xs, fov[1], fov[2])
+    y0, y1 = _raster_bounds(ys, fov[3], fov[4])
     nx = max(1, ceil(Int, (x1 - x0) / bin) + 1)
     ny = max(1, ceil(Int, (y1 - y0) / bin) + 1)
     bx(x) = clamp(floor(Int, (x - x0) / bin) + 1, 1, nx)
