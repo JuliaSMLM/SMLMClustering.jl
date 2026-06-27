@@ -4,11 +4,22 @@
 /Manifest*.toml
 /docs/Manifest*.toml
 /docs/build/
+/examples/Manifest*.toml
+/examples/output/
 /.claude/scheduled_tasks.lock
 /.claude/dashboard/*.pane
 /.claude/commands/start-round.md
+/.claude/commands/dispatch-round.md
 /.claude/dashboard/regenerate.md
 /.claude/dashboard/status-view.md
+/.claude/dashboard/questions-view.md
 /.claude/scripts/dispatch-round.sh
+/.claude/round/
 /dev/
 /.codex
+
+# Internal dev scaffolding — kept on disk, never shipped to the public package
+/KNOWLEDGE_BASE.md
+/QUESTIONS.md
+/STATUS.md
+/rounds/

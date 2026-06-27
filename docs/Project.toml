@@ -1,3 +1,6 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 SMLMClustering = "5e733723-370a-41a4-ac41-ff3a91b0b806"
+
+[compat]
+Documenter = "1"

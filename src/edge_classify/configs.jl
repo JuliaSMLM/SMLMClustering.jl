@@ -7,14 +7,13 @@ config is dispatched as a method of `classify_emitters`:
 
 - `OuterPolygonConfig` — reflect → multi-K density gate → alpha-shape outer loop →
   point-in-polygon + membrane band.
-- `KdeValleyConfig` — validated adaptive dSTORM gate (Gaussian-KDE + valley + footprint
+- `KdeValleyConfig` — adaptive dSTORM density-valley gate (Gaussian-KDE + valley + footprint
   + enclosure); gates on the original cloud, runs the outer-polygon geometry on the
   footprint subset, then folds enclosure.
 
 Struct fields are lowercase (idiomatic Julia); the UPPERCASE `params.json` keys are
 produced only at the serialization boundary by `to_dict`.
 """
-
 abstract type AbstractEdgeClassifyConfig <: SMLMData.AbstractSMLMConfig end
 
 """
@@ -37,9 +36,10 @@ end
     KdeValleyConfig(; alpha_nm=600, membrane_nm=100, reflect_radius_nm=1500,
                     fov_trunc_tol_nm=150, sigma_nm=150, ...)
 
-Validated adaptive dSTORM gate (genmab). `alpha_nm = 600` is the validated value
-(not the polygon default 300); each field carries its own validated default, so a
-bare `KdeValleyConfig()` is correct.
+Adaptive density-valley gate for dSTORM data. Gates on the per-FOV KDE density valley
+(threshold-free, no per-cell tuning). The defaults are tuned for dSTORM membrane data
+— notably `alpha_nm = 600` (vs. the polygon default of 300) — so a bare
+`KdeValleyConfig()` is the intended entry point.
 """
 Base.@kwdef struct KdeValleyConfig <: AbstractEdgeClassifyConfig
     alpha_nm::Float64          = 600.0
@@ -97,6 +97,13 @@ end
 
 # ---- traits ------------------------------------------------------------------
 
+"""
+    method_name(cfg) -> String
+
+Short identifier for the edge-classification strategy selected by `cfg`'s concrete
+type: `"outer_polygon"` for [`OuterPolygonConfig`](@ref) and `"kde_valley"` for
+[`KdeValleyConfig`](@ref). Used in diagnostics, logging, and output manifests.
+"""
 method_name(::OuterPolygonConfig) = "outer_polygon"
 method_name(::KdeValleyConfig)    = "kde_valley"
 

@@ -5,7 +5,7 @@
 # config, writes stable artifacts under `<out_dir>/<condition>/<cell>/`.
 #
 # Usage:
-#   julia --project=. scripts/edge_classify.jl \
+#   julia --project=examples examples/edge_classify.jl \
 #       --smld <path.jld2> --condition <COND> --cell <CELL> \
 #       --out <out_dir> [--params <params.toml>]
 #

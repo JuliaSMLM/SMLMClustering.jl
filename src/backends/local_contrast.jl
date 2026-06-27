@@ -82,8 +82,8 @@ fine = info.extras[:log_density_per_emitter]
 fine_floor = quantile(filter(isfinite, fine), 0.35)
 seed = isfinite.(contrast) .& (contrast .> 0.25) .& (fine .> fine_floor)
 support = isfinite.(contrast) .& (contrast .> -0.05) .& (fine .> fine_floor)
-(smld_out, _) = point_hysteresis_clusters(smld, seed, support;
-                                          graph_k=12, min_points=150)
+(smld_out, _) = cluster(smld, PointHysteresisConfig(graph_k=12, min_points=150);
+                        seed=seed, support=support)
 ```
 
 See also: [`AbstractStatisticsConfig`](@ref), [`ClusterStatisticsInfo`](@ref).

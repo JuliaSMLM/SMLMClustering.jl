@@ -1,18 +1,23 @@
 # SMLMClustering
 
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://juliasmlm.github.io/SMLMClustering.jl/stable)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://juliasmlm.github.io/SMLMClustering.jl/dev)
+[![Build Status](https://github.com/JuliaSMLM/SMLMClustering.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/JuliaSMLM/SMLMClustering.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![Coverage](https://codecov.io/gh/JuliaSMLM/SMLMClustering.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/JuliaSMLM/SMLMClustering.jl)
+
 Clustering and spatial-statistic backends for single-molecule localization
 microscopy (SMLM) data.
 
 Provides three parallel entry points over `SMLMData.BasicSMLD`:
 
-- **`cluster`** — labeling backends (DBSCAN, Voronoi-tessellation /
-  SR-Tesseler-style, agglomerative hierarchical) that assign cluster ids to
-  every emitter.
+- **`cluster`** — labeling backends (DBSCAN, HDBSCAN, agglomerative hierarchical,
+  Voronoi / SR-Tesseler, MRF density-regime, point-hysteresis) that assign cluster
+  ids to every emitter.
 - **`cluster_statistics`** — read-only spatial-statistic backends (Hopkins
-  clustering tendency, Voronoi per-emitter density, ...) that compute
-  summary scalars / vectors.
+  clustering tendency, Voronoi per-emitter density, local-contrast feature) that
+  compute summary scalars / vectors.
 - **`classify_emitters`** — edge / membrane / interior classification
-  (`OuterPolygonConfig`, and the validated adaptive `KdeValleyConfig`) labeling
+  (`OuterPolygonConfig` and the adaptive `KdeValleyConfig`) labeling
   each emitter `:outside` / `:membrane` / `:interior`.
 
 ## Entry points
@@ -301,8 +306,14 @@ datasets refers to different clusters.
 ## Installation
 
 ```julia
-# From the JuliaSMLM GitHub org (once the repo is public):
 using Pkg
+Pkg.add("SMLMClustering")
+```
+
+For the development version (or before the package is registered in the General
+registry):
+
+```julia
 Pkg.add(url="https://github.com/JuliaSMLM/SMLMClustering.jl")
 ```
 

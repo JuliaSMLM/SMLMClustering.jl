@@ -10,7 +10,7 @@ dispatch, and the result is an [`EdgeClassifyInfo`](@ref).
 Strategies:
 - [`OuterPolygonConfig`](@ref) — multi-K density gate → alpha-shape outer loop →
   point-in-polygon + membrane band.
-- [`KdeValleyConfig`](@ref) — validated adaptive dSTORM gate (Gaussian-KDE +
+- [`KdeValleyConfig`](@ref) — adaptive dSTORM density-valley gate (Gaussian-KDE +
   background/cell valley + footprint fill + enclosure reclass).
 """
 module EdgeClassify

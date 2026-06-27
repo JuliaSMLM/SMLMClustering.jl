@@ -6,6 +6,11 @@ off-cell background, the cell-boundary band, and the cell interior. The verb
 the **concrete config type selects the strategy by dispatch**, and the result is an
 `EdgeClassifyInfo`.
 
+![Edge classification of a synthetic cell](../assets/edge_classify.png)
+
+*A synthetic cell classified into interior (blue), membrane (orange), and outside
+background (gray) by `OuterPolygonConfig`.*
+
 ## API
 
 ```julia
@@ -47,15 +52,17 @@ point-in-polygon + a `membrane_nm` band.
 
 ### `KdeValleyConfig`
 
-Validated adaptive dSTORM gate. Gaussian-KDE density on the **original** cloud →
-background/cell valley threshold → footprint fill → the outer-polygon geometry on
-the footprint subset → ray-cast **enclosure** reclass folding enclosed background
-into `:interior`. Per-FOV adaptive — no per-cell density tuning. `alpha_nm = 600`
-is the validated value (the type carries it; no factory needed).
+Adaptive density-valley gate for dSTORM data. Gaussian-KDE density on the **original**
+cloud → background/cell valley threshold → footprint fill → the outer-polygon geometry
+on the footprint subset → ray-cast **enclosure** reclass folding enclosed background
+into `:interior`. The valley threshold is found **per FOV**, so there is no per-cell
+density tuning — which is what lets it generalize across cells whose absolute density
+varies. The defaults (notably `alpha_nm = 600`, vs. the polygon default of 300) are
+tuned for dSTORM membrane data, so a bare `KdeValleyConfig()` is the intended entry point.
 
 | field | default | unit | meaning |
 |---|---|---|---|
-| `alpha_nm` | 600 | nm | alpha-shape circumradius (validated) |
+| `alpha_nm` | 600 | nm | alpha-shape circumradius (dSTORM-tuned default) |
 | `membrane_nm` | 100 | nm | membrane band width |
 | `reflect_radius_nm` | 1500 | nm | mirror band inboard of truncated sides |
 | `fov_trunc_tol_nm` | 150 | nm | FOV-truncation tolerance |
@@ -68,6 +75,25 @@ is the validated value (the type carries it; no factory needed).
 | `footprint_closing_px` | 3 | px | morphological closing radius (seal thin necks) |
 | `enclosure_bin_um` | 0.2 | µm | raster bin for the 8-ray enclosure reclass |
 | `enclosure_min_hits` | 6 | of 8 | min rays hitting cell tissue to fold a point into `:interior` |
+
+## Choosing a strategy
+
+The two strategies split along **gate vs. geometry**. Both end in the same alpha-shape
+outer-loop geometry — `KdeValleyConfig` reuses the outer-polygon machinery on its
+footprint subset — so they differ only in how they decide which localizations are cell
+tissue:
+
+- **`OuterPolygonConfig`** gates on a **fixed multi-K kNN density threshold**: fast and
+  simple, but the threshold is absolute, so it must be set for your dataset's density
+  and works best when density is **homogeneous** across FOVs.
+- **`KdeValleyConfig`** gates on the **valley of the per-FOV KDE density histogram** —
+  an adaptive, threshold-free criterion that handles **heterogeneous** cell-to-cell
+  density without per-cell tuning.
+
+Prefer `KdeValleyConfig` (the recommended default) unless your FOVs are uniform in
+density and you want the simpler, faster fixed-threshold gate. The fixed-threshold gate
+was the earlier approach; the alpha-shape geometry it introduced is still the shared
+core of both.
 
 ## Result — `EdgeClassifyInfo`
 
@@ -132,3 +158,14 @@ Flags `:interior` emitters that sit in deep concave bays the alpha-shape bridged
 across (boundary-proximal, high directional asymmetry, low local density),
 stratified by whether the nearest outer segment is inside the FOV or straddles its
 edge. Diagnostic only — does not change `class`. Returns a `ConcavityMetricReport`.
+
+## References
+
+- **Alpha shapes** (the outer-loop primitive): Edelsbrunner & Mücke, "Three-dimensional
+  alpha shapes", *ACM Trans. Graph.* 13(1), 43–72 (1994),
+  [doi:10.1145/174462.156635](https://doi.org/10.1145/174462.156635). Concave-hull /
+  χ-shape variants are reasonable alternatives for the boundary loop.
+- **Related density-segmentation lineage** (the contrast for the density gate): Levet
+  et al., "SR-Tesseler", *Nat. Methods* 12, 1065–1071 (2015),
+  [doi:10.1038/nmeth.3579](https://doi.org/10.1038/nmeth.3579) — Voronoi-area density
+  thresholded at a valley; `KdeValleyConfig` is the KDE analogue of that idea.

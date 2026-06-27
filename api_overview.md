@@ -79,6 +79,39 @@ DBSCANConfig(eps_nm=100.0, min_points=3, use_3d=true)
 
 ---
 
+### `HDBSCANConfig <: AbstractClusterConfig`
+
+**Source:** `src/backends/hdbscan.jl`
+**Algorithm:** HDBSCAN* (hierarchical density clustering): core / mutual-reachability distances → MST → condensed tree → stability-based flat extraction
+**Library:** pure-Julia implementation (NearestNeighbors.jl for the kNN)
+
+**Fields:**
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `min_points` | `Int` | `5` | core-distance neighbor count *k* (density-smoothing scale) |
+| `min_cluster_size` | `Int` or `Nothing` | `nothing` | minimum cluster size in the condensed tree; falls back to `min_points` when `nothing` |
+| `knn_graph_k` | `Int` | `30` | neighbors per point in the sparse kNN graph used to build the MST |
+| `cluster_selection_method` | `Symbol` | `:eom` | flat extraction: `:eom` (excess of mass) or `:leaf` |
+| `allow_single_cluster` | `Bool` | `false` | allow the root to be selected as a single cluster |
+| `use_3d` | `Bool` | `false` | 2D (`x,y`) or 3D (`x,y,z`) clustering |
+| `per_dataset` | `Bool` | `true` | Per-dataset namespacing |
+| `remove_unclustered` | `Bool` | `false` | Drop noise emitters |
+
+**Validation:** `min_points >= 1`, `knn_graph_k >= 1`, `cluster_selection_method ∈ {:eom, :leaf}`, and an effective `min_cluster_size >= 2` (after the `nothing → min_points` fallback). A too-small kNN graph self-repairs by bridging disconnected components.
+
+**Returned metadata:** `smld_out.metadata["hdbscan_cluster_persistence"]` and `["hdbscan_cluster_lambda_birth"]` — per-cluster, concatenated across datasets in `per_dataset` order.
+
+**Supports 3D:** yes.
+
+**Constructor:**
+```julia
+HDBSCANConfig()
+HDBSCANConfig(min_points=8, min_cluster_size=20)
+```
+
+---
+
 ### `HierarchicalConfig <: AbstractClusterConfig`
 
 **Source:** `src/backends/hierarchical.jl`
@@ -148,7 +181,7 @@ background. No global ε, no per-dataset density tuning.
 | `inference` | `Symbol` | `:icm` | MRF inference; only `:icm` supported in v1 |
 | `icm_iters` | `Int` | `50` | Maximum ICM passes (early termination on convergence) |
 | `min_points` | `Int` | `5` | Minimum cluster size after CC |
-| `use_3d` | `Bool` | `false` | **Must be `false`** — 3D not supported (V7) |
+| `use_3d` | `Bool` | `false` | **Must be `false`** — 3D not supported |
 | `per_dataset` | `Bool` | `true` | Run pipeline per dataset (independent GMM fit per cell) |
 | `remove_unclustered` | `Bool` | `false` | Drop noise emitters |
 
@@ -226,6 +259,43 @@ VoronoiConfig(density_factor=3.0, min_points=10)
 
 ---
 
+### `PointHysteresisConfig <: AbstractClusterConfig`
+
+**Source:** `src/backends/point_hysteresis.jl`
+**Algorithm:** seed-and-grow connected components on a directed kNN graph, gated by caller-supplied `seed` / `support` masks (density hysteresis)
+**Library:** NearestNeighbors.jl
+
+Unlike the other labeling backends, `cluster` for `PointHysteresisConfig` takes two
+**required keyword masks**, computed upstream (e.g. from `LocalContrastFeature`):
+
+```julia
+cluster(smld, PointHysteresisConfig(); seed=seed_mask, support=support_mask)
+```
+
+A `support`-connected component becomes a cluster iff it contains at least one `seed`
+point and has at least `min_points` members.
+
+**Fields:**
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `graph_k` | `Int` | `12` | neighbors per point in the directed kNN growth graph |
+| `min_points` | `Int` | `100` | minimum component size to keep as a cluster |
+| `use_3d` | `Bool` | `false` | 2D or 3D |
+| `per_dataset` | `Bool` | `false` | Per-dataset namespacing |
+| `remove_unclustered` | `Bool` | `false` | Drop noise emitters |
+
+**Required keyword args (on `cluster`):** `seed::AbstractVector{Bool}` and `support::AbstractVector{Bool}`, each of length = number of emitters.
+
+**Supports 3D:** yes.
+
+**Constructor:**
+```julia
+PointHysteresisConfig(graph_k=12, min_points=50)
+```
+
+---
+
 ## Result type
 
 ### `ClusterInfo <: SMLMData.AbstractSMLMInfo`
@@ -241,7 +311,7 @@ VoronoiConfig(density_factor=3.0, min_points=10)
 | `n_noise` | `Int` | Localizations with `id == 0` |
 | `n_clusters` | `Int` | Distinct clusters formed |
 | `cluster_sizes` | `Vector{Int}` | Size of cluster `k` at index `k`; length = `n_clusters` |
-| `algorithm` | `Symbol` | `:dbscan`, `:hdbscan`, `:voronoi`, `:hierarchical`, or `:mrf_density` |
+| `algorithm` | `Symbol` | `:dbscan`, `:hdbscan`, `:hierarchical`, `:voronoi`, `:mrf_density`, or `:point_hysteresis` |
 | `elapsed_s` | `Float64` | Wall-clock time of the `cluster` call (seconds) |
 
 **`cluster_sizes` convention:** When `per_dataset = true`, sizes from all datasets are
@@ -280,14 +350,6 @@ run after FrameConnect / BaGoL (which use `track_id`, leaving `id` free).
 
 ---
 
-## Not yet implemented
-
-- **HDBSCANConfig** — slot reserved; no lightweight pure-Julia HDBSCAN library exists
-  as of 2026-04-17. See `KNOWLEDGE_BASE.md` D1 for details. Monitor
-  `Clustering.jl` issue #139.
-
----
-
 ## Sibling entry point — `cluster_statistics`
 
 `cluster_statistics(smld, cfg) -> (smld, ClusterStatisticsInfo)` is a **read-only**
@@ -297,7 +359,7 @@ diagnostics, etc.). The two interfaces are intentionally asymmetric:
 | Aspect | `cluster()` | `cluster_statistics()` |
 |--------|-------------|------------------------|
 | Writes labels? | Yes (`emitter.id`) | No |
-| Input SMLD | Deep-copied (V9) | Pass-through (same reference) |
+| Input SMLD | Deep-copied | Pass-through (same reference) |
 | Result info | `ClusterInfo` | `ClusterStatisticsInfo` |
 | Abstract supertype | `AbstractClusterConfig` | `AbstractStatisticsConfig` |
 
@@ -384,7 +446,7 @@ HopkinsConfig(n_samples=50, random_repeats=10, seed=1)
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `use_3d` | `Bool` | `false` | **Must be `false`** — 3D Voronoi not supported (V7) |
+| `use_3d` | `Bool` | `false` | **Must be `false`** — 3D Voronoi not supported |
 | `per_dataset` | `Bool` | `true` | Tessellate each dataset independently |
 
 **Validation:** `use_3d == false` (raises `ArgumentError` directing to `VoronoiConfig` docstring otherwise).
@@ -408,6 +470,40 @@ HopkinsConfig(n_samples=50, random_repeats=10, seed=1)
 VoronoiDensityConfig()
 VoronoiDensityConfig(per_dataset=false)
 ```
+
+### `LocalContrastFeature <: AbstractStatisticsConfig`
+
+**Source:** `src/backends/local_contrast.jl`
+**Algorithm:** per-emitter local-density contrast — fine-scale kNN log-density minus the median log-density over a coarser neighborhood (cancels a baseline density gradient)
+**Library:** NearestNeighbors.jl, Statistics
+
+**Fields:**
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `density_k` | `Int` | `200` | fine-scale neighbor count for the per-point log-density |
+| `background_k` | `Int` | `2000` | coarse-scale neighbor count for the local baseline; must be `> density_k` |
+| `use_3d` | `Bool` | `false` | 2D or 3D (the density normalization uses the 2D disk area regardless) |
+| `per_dataset` | `Bool` | `false` | compute each dataset independently |
+
+**Validation:** `background_k > density_k` and `density_k >= 1` (raises `ArgumentError` otherwise).
+
+**Returned info:**
+- `statistic`: median of the finite per-emitter contrasts.
+- `statistic_name`: `:median_local_contrast`.
+- `algorithm`: `:local_contrast`.
+- `extras[:contrast_per_emitter]`: `Vector{Float64}`, length `n_locs_in`, original emitter order.
+- `extras[:log_density_per_emitter]`: `Vector{Float64}`, the fine kNN log-density, same ordering.
+
+**Use case:** a threshold-ready foreground feature on data with non-stationary baseline density — e.g. to build the `seed` / `support` masks for `PointHysteresisConfig`.
+
+**Constructor:**
+```julia
+LocalContrastFeature()
+LocalContrastFeature(density_k=20, background_k=200)
+```
+
+---
 
 ## Sibling entry point — `classify_emitters`
 

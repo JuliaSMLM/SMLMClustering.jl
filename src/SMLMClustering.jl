@@ -1,20 +1,25 @@
 """
     SMLMClustering
 
-Clustering backends for single-molecule localization microscopy data.
+Clustering and spatial-statistic backends for single-molecule localization
+microscopy (SMLM) data, operating on `SMLMData.BasicSMLD` emitters.
 
-Provides a common interface over four clustering algorithms — DBSCAN,
-HDBSCAN, Voronoi tessellation, and hierarchical — operating on
-`SMLMData.BasicSMLD` emitters. Each backend writes cluster labels back
-to `emitter.id` (`0` = noise, `1..K` = cluster).
+Three verbs, each dispatched on a concrete config type:
+
+- `cluster` — labeling backends (DBSCAN, HDBSCAN, hierarchical, Voronoi/SR-Tesseler,
+  MRF density-regime, point-hysteresis) that write a cluster id onto each
+  `emitter.id` (`0` = noise, `1..K` = clusters).
+- `cluster_statistics` — read-only spatial statistics (Hopkins clustering tendency,
+  Voronoi per-emitter density, local-contrast feature).
+- `classify_emitters` — edge / membrane / interior classification.
 
 # Entry point
 ```julia
 (smld_out, info) = cluster(smld, cfg)
 ```
 
-where `cfg` is a concrete `AbstractClusterConfig` subtype supplied by
-one of the backends.
+where `cfg` is a concrete `AbstractClusterConfig` subtype supplied by one of the
+backends. See the documentation for the full method catalog.
 """
 module SMLMClustering
 
