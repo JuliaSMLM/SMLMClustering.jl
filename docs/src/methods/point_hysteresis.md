@@ -9,6 +9,12 @@ or smaller than `min_points` — is dropped to noise. The two confidence levels
 "strong" and "weak" arms of a density hysteresis computed *outside* the backend
 (typically from `LocalContrastFeature`).
 
+![Seed → support → grown clusters](../assets/point_hysteresis.png)
+
+*Hysteresis seed-and-grow: a few high-confidence **seed** points (left) grow through
+the lower-threshold **support** set (middle) into the final clusters (right). Seed and
+support masks here come from `LocalContrastFeature`.*
+
 ## Concept
 
 A single density cutoff forces one compromise everywhere: set it high and you

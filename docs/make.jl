@@ -29,7 +29,6 @@ makedocs(;
             "Local contrast" => "methods/local_contrast.md",
             "Edge classification" => "methods/edge_classify.md",
         ],
-        "Results Gallery" => "results.md",
         "API Reference" => "api.md",
     ],
     # checkdocs=:exports enforces every exported symbol is documented; warnonly is

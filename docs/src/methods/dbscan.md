@@ -9,6 +9,12 @@ and is backed by `Clustering.dbscan` from
 per-emitter label into `emitter.id` (`0` = noise, `1..K` = cluster), and returns
 `(smld_out, ClusterInfo)`.
 
+![DBSCAN under two eps values](../assets/dbscan.png)
+
+*The same field labeled with `eps_nm` too tight (left — the top-right cluster
+fragments and more points fall to noise) vs. well-chosen (right). Noise (`id = 0`) is
+gray.*
+
 ## Concept
 
 DBSCAN groups points that lie in dense neighborhoods and discards sparse points

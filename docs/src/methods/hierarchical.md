@@ -6,6 +6,12 @@ Agglomerative hierarchical clustering of SMLM localizations, exposed as a
 merged bottom-up into a dendrogram, then cut into flat clusters either at a
 height (`cut_threshold`) or to a fixed number of clusters (`n_clusters`).
 
+![Single-linkage chaining vs Ward](../assets/hierarchical.png)
+
+*Cut to two clusters on two blobs joined by a thin bridge. Single linkage **chains**
+across the bridge, so both blobs land in the same cluster (the 2-cluster cut only peels
+off a stray point); Ward keeps the blobs apart (right).*
+
 ## Concept
 
 Agglomerative clustering starts with every localization in its own singleton
