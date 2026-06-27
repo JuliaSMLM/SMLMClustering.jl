@@ -29,6 +29,7 @@ end
         @test cfg.knn_graph_k == 30
         @test cfg.cluster_selection_method === :eom
         @test cfg.allow_single_cluster === false
+        @test cfg.halo_trim_frac == 0.10
         @test cfg.use_3d === false
         @test cfg.per_dataset === true
         @test cfg.remove_unclustered === false
@@ -241,5 +242,48 @@ end
         @test info.n_clusters == 2
     end
     end  # SMLM_TEST_FULL
+
+    @testset "halo trimming keeps a diffuse cluster within its physical extent" begin
+        # Regression for the HDBSCAN over-assignment bug: raw HDBSCAN* labels every
+        # point under a selected cluster's branch, so a diffuse cluster near the noise
+        # floor swept in background out to ~4µm. halo_trim_frac (default 0.10) must keep
+        # its members within the cluster's physical extent (~0.7µm here).
+        rng = Xoshiro(20260627)
+        pts = Tuple{Float64,Float64,Int}[]
+        append!(pts, _blob_hdbscan(rng, 1.5, 2.5, 0.03, 400))   # dense
+        append!(pts, _blob_hdbscan(rng, 3.5, 2.5, 0.20, 400))   # diffuse, near noise floor
+        for _ in 1:150
+            push!(pts, (5.0 * rand(rng), 5.0 * rand(rng), 1))   # uniform background
+        end
+        smld = _make_2d_smld_hdbscan(pts; n_datasets = 1)
+
+        # (label, max radius from the diffuse core) of the cluster covering (3.5, 2.5)
+        diffuse_radius = function (o)
+            lab = [e.id for e in o.emitters]
+            X = [e.x for e in o.emitters]; Y = [e.y for e in o.emitters]
+            dl = lab[argmin((X .- 3.5) .^ 2 .+ (Y .- 2.5) .^ 2)]
+            mem = findall(==(dl), lab)
+            (dl, maximum(sqrt.((X[mem] .- 3.5) .^ 2 .+ (Y[mem] .- 2.5) .^ 2)))
+        end
+
+        out, info = cluster(smld, HDBSCANConfig(min_points = 10, min_cluster_size = 25,
+                                                per_dataset = false))
+        @test info.n_clusters == 2
+        dl, rmax = diffuse_radius(out)
+        @test dl > 0
+        @test rmax < 1.5                     # physical edge ≈ 0.7µm; the bug reached ~4µm
+
+        # halo_trim_frac = 0 disables trimming → the wide halo returns
+        out0, info0 = cluster(smld, HDBSCANConfig(min_points = 10, min_cluster_size = 25,
+                                                  per_dataset = false, halo_trim_frac = 0.0))
+        @test info0.n_clusters == 2
+        dl0, rmax0 = diffuse_radius(out0)
+        @test dl0 > 0
+        @test rmax0 > 2.0
+
+        # out-of-range halo_trim_frac is rejected
+        @test_throws ArgumentError cluster(smld,
+            HDBSCANConfig(halo_trim_frac = 1.0, per_dataset = false))
+    end
 
 end

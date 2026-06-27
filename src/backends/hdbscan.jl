@@ -35,7 +35,8 @@
 """
     HDBSCANConfig(; min_points=5, min_cluster_size=nothing, knn_graph_k=30,
                     cluster_selection_method=:eom, allow_single_cluster=false,
-                    use_3d=false, per_dataset=true, remove_unclustered=false)
+                    halo_trim_frac=0.10, use_3d=false, per_dataset=true,
+                    remove_unclustered=false)
 
 Configuration for HDBSCAN clustering of SMLM localizations. Pure-Julia
 implementation of Campello/Moulavi/Sander 2013.
@@ -57,6 +58,15 @@ implementation of Campello/Moulavi/Sander 2013.
   that is essentially one tight blob with no internal real splits — the
   canonical EOM rule otherwise returns zero clusters in that case. Default
   matches the Python `hdbscan` package default.
+- `halo_trim_frac::Float64 = 0.10`: halo-trim fraction. A point that fell out of its
+  cluster individually (a transient / halo point) is kept only if it survived past
+  this fraction of the cluster's λ-life; weakly-attached points that peeled off near
+  the cluster's birth (density-connected background the MST routed onto the cluster's
+  side) are dropped to noise. `0` disables trimming (raw condensed-tree labels — every
+  point under a selected branch is a member); larger values trim more aggressively.
+  Calibrate against the physical edge (the radius where cluster density crosses
+  background); for the validated default the diffuse-cluster member radius matches
+  that edge.
 - `use_3d::Bool = false`: cluster in (x, y, z); requires 3D emitters.
 - `per_dataset::Bool = true`: cluster within each `dataset` index independently.
 - `remove_unclustered::Bool = false`: drop noise emitters from the output SMLD.
@@ -84,6 +94,7 @@ Base.@kwdef struct HDBSCANConfig <: AbstractClusterConfig
     knn_graph_k::Int = 30
     cluster_selection_method::Symbol = :eom
     allow_single_cluster::Bool = false
+    halo_trim_frac::Float64 = 0.10
     use_3d::Bool = false
     per_dataset::Bool = true
     remove_unclustered::Bool = false
@@ -99,7 +110,8 @@ function _hdbscan_core(X::AbstractMatrix{Float64};
                       min_cluster_size::Int,
                       knn_graph_k::Int,
                       cluster_selection_method::Symbol,
-                      allow_single_cluster::Bool = false)
+                      allow_single_cluster::Bool = false,
+                      halo_trim_frac::Float64 = 0.10)
     n = size(X, 2)
     if n == 0
         return (assignments = Int[],
@@ -498,21 +510,39 @@ function _hdbscan_core(X::AbstractMatrix{Float64};
         id_map[c] = k
     end
 
+    # Fraction of a cluster's λ-life a transient (individually-fallen) point must
+    # have survived to count as a member rather than weakly-attached halo. A point
+    # that peeled off near the cluster's birth (≈ density-connected background that
+    # the MST routed onto the cluster's side) is dropped to noise; one that survived
+    # deep into the cluster's life is a genuine edge member and is kept. (GLOSH-style;
+    # a blanket transient→noise rule over-prunes, since a Gaussian cluster sheds most
+    # of its members transiently.)
+    halo_min_life_frac = halo_trim_frac
+
     assignments = Vector{Int}(undef, n)
     @inbounds for p in 1:n
-        # Walk up from the point's innermost cluster to find the deepest
-        # selected ancestor. Each point was a member of its innermost cluster
-        # and all of that cluster's ancestors; whichever of those is selected
-        # is its label. If no ancestor is selected, the point is noise.
+        # Walk up from the point's innermost cluster to find the deepest selected
+        # ancestor. If none selected, the point is noise.
         c = point_cluster[p]
         while c > 0 && !selected[c]
             c = cluster_parent[c]
         end
-        if c > 0 && selected[c]
-            assignments[p] = id_map[c]
-        else
+        if !(c > 0 && selected[c])
             assignments[p] = 0
+            continue
         end
+        # Halo pruning: a transient point that left its cluster very close to the
+        # cluster's birth is weakly attached → noise (see descend_falling_iter!).
+        if point_fell_individually[p]
+            cf    = point_cluster[p]
+            birth = cluster_birth_lambda[cf]
+            death = cluster_death_lambda[cf]
+            if death > birth && (point_lambda[p] - birth) < halo_min_life_frac * (death - birth)
+                assignments[p] = 0
+                continue
+            end
+        end
+        assignments[p] = id_map[c]
     end
 
     final_persistence = [stability[c] for c in selected_ids]
@@ -539,6 +569,8 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::HDBSCANConfig)
         throw(ArgumentError("HDBSCANConfig.knn_graph_k must be ≥ 1 (got $(cfg.knn_graph_k))"))
     cfg.cluster_selection_method in (:eom, :leaf) ||
         throw(ArgumentError("HDBSCANConfig.cluster_selection_method must be :eom or :leaf (got $(cfg.cluster_selection_method))"))
+    (0.0 <= cfg.halo_trim_frac < 1.0) ||
+        throw(ArgumentError("HDBSCANConfig.halo_trim_frac must be in [0, 1) (got $(cfg.halo_trim_frac))"))
     mcs = cfg.min_cluster_size === nothing ? cfg.min_points : cfg.min_cluster_size
     mcs >= 2 ||
         throw(ArgumentError("HDBSCANConfig.min_cluster_size must be ≥ 2 (got $mcs)"))
@@ -558,7 +590,8 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::HDBSCANConfig)
                             min_cluster_size = mcs,
                             knn_graph_k = cfg.knn_graph_k,
                             cluster_selection_method = cfg.cluster_selection_method,
-                            allow_single_cluster = cfg.allow_single_cluster)
+                            allow_single_cluster = cfg.allow_single_cluster,
+                            halo_trim_frac = cfg.halo_trim_frac)
         @inbounds for (j, i) in pairs(idxs)
             smld.emitters[i].id = res.assignments[j]
         end

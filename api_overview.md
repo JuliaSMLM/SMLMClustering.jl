@@ -94,6 +94,7 @@ DBSCANConfig(eps_nm=100.0, min_points=3, use_3d=true)
 | `knn_graph_k` | `Int` | `30` | neighbors per point in the sparse kNN graph used to build the MST |
 | `cluster_selection_method` | `Symbol` | `:eom` | flat extraction: `:eom` (excess of mass) or `:leaf` |
 | `allow_single_cluster` | `Bool` | `false` | allow the root to be selected as a single cluster |
+| `halo_trim_frac` | `Float64` | `0.10` | trim weakly-attached halo points (fell near a cluster's birth) to noise so members track the cluster's physical extent; `0` disables (raw HDBSCAN* subtree labels) |
 | `use_3d` | `Bool` | `false` | 2D (`x,y`) or 3D (`x,y,z`) clustering |
 | `per_dataset` | `Bool` | `true` | Per-dataset namespacing |
 | `remove_unclustered` | `Bool` | `false` | Drop noise emitters |

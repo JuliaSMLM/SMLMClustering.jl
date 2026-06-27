@@ -8,6 +8,12 @@ so clusters of differing local density can be recovered in one pass. The
 implementation is **pure Julia** (no external HDBSCAN library) built on
 [`NearestNeighbors.KDTree`](https://github.com/KristofferC/NearestNeighbors.jl).
 
+![HDBSCAN vs single-eps DBSCAN on mixed density](../assets/hdbscan.png)
+
+*Two clusters of very different density. A single DBSCAN `eps` tuned for the dense
+cluster misses the diffuse one entirely (left); HDBSCAN's adaptive density recovers
+both (right).*
+
 ## Concept
 
 DBSCAN draws clusters at one density level set by `eps_nm`: a clump that is dense in one
@@ -184,6 +190,13 @@ smld3, info3 = cluster(smld, cfg3)
   well-separated multi-cluster data to skip repairs.
 - **Empty / tiny groups.** A group with `n = 0` yields no clusters; a group with
   $n <$ effective `min_cluster_size` is returned entirely as noise (no error).
+- **Halo trimming (`halo_trim_frac`).** Raw HDBSCAN\* labels *every* point under a
+  selected cluster's branch, which lets a diffuse cluster sweep in density-connected
+  background far beyond its real extent. By default this backend **trims that halo**:
+  a point that fell out of its cluster near the cluster's birth (weakly attached) is
+  returned as noise, so a cluster's members track its physical extent — the radius
+  where its density crosses the background level. Set `halo_trim_frac = 0` for the raw,
+  un-trimmed HDBSCAN\* labels; raise it to trim more aggressively.
 - **Coincident points.** Duplicate coordinates give $d_\text{mreach} = 0$ and
   $\lambda = \infty$; these are handled (the merge level is treated as infinite
   density) rather than erroring, unlike the Voronoi backend's duplicate guard.
