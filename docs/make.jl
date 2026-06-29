@@ -31,11 +31,12 @@ makedocs(;
         ],
         "API Reference" => "api.md",
     ],
-    # checkdocs=:exports enforces every exported symbol is documented; warnonly is
-    # temporary during the docs build-out so a missing docstring / cross-ref surfaces
-    # as a warning instead of failing the build. Tighten to `warnonly = false` before release.
+    # checkdocs=:exports enforces every exported symbol is documented. The build is
+    # strict — doctests, cross-references, and @docs/@autodocs blocks all error — except
+    # for :missing_docs, which only warns: the two module-level docstrings
+    # (SMLMClustering, EdgeClassify) are intentionally not given standalone @docs blocks.
     checkdocs = :exports,
-    warnonly = true,
+    warnonly = [:missing_docs],
 )
 
 deploydocs(;
