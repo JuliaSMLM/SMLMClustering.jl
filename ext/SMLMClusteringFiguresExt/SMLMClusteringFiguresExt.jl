@@ -104,13 +104,13 @@ end
         -> Vector{String}
 
 Write the standard edge-mask figure series into `output_dir`, returning the saved
-paths: `<prefix>_classes.png` (SMLMRender CircleRender QC view — emitters sized by
-precision), `<prefix>_render.png` (SMLMRender Gaussian SR at the same zoom and class
-colors — the prettier downstream-style diagnostic), `<prefix>_overlay.png`
+paths: `<prefix>_render.png` (SMLMRender Gaussian SR at `zoom_render`, colored by
+class — interior / membrane / outside — the class image), `<prefix>_overlay.png`
 (CairoMakie polygon overlay over class-colored localizations) and
 `<prefix>_fractions.png` (class-fraction bar). `zoom_render` sets the render
 resolution (e.g. 20 ≈ 5 nm/px for a ~100 nm camera); `zoom_overlay` is reserved for
-a future render-backed overlay variant.
+a future render-backed overlay variant. (`render_classes` still supports CircleRender
+via its `strategy` kwarg if a per-emitter QC view is wanted ad hoc.)
 
 Requires both `CairoMakie` and `SMLMRender` loaded (this `SMLMClusteringFiguresExt`).
 """
@@ -118,10 +118,7 @@ function SMLMClustering.plot_edge_report(report::SMLMClustering.EdgeReport;
         output_dir::AbstractString, zoom_overlay = 10, zoom_render = 20, prefix = "edge")
     mkpath(output_dir)
     paths = String[]
-    pr = joinpath(output_dir, "$(prefix)_classes.png")           # CircleRender QC view (per-emitter + precision)
-    SMLMClustering.render_classes(report.smld, report.info.class; zoom = zoom_render, filename = pr)
-    push!(paths, pr)
-    pg = joinpath(output_dir, "$(prefix)_render.png")            # Gaussian SR at zoom_render, same class colors
+    pg = joinpath(output_dir, "$(prefix)_render.png")            # 5 nm Gaussian SR with edge classes
     SMLMClustering.render_classes(report.smld, report.info.class; zoom = zoom_render,
                                   strategy = GaussianRender(use_localization_precision = false,
                                                             fixed_sigma = 5.0),
