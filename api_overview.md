@@ -414,6 +414,7 @@ descriptive key. Hopkins per-dataset vector goes under `:hopkins_per_dataset`.
 | `seed` | `Union{Int,Nothing}` | `nothing` | RNG seed for reproducibility |
 | `use_3d` | `Bool` | `false` | Include z-coordinate |
 | `per_dataset` | `Bool` | `true` | Compute per dataset and aggregate |
+| `region` | `Nothing` / `Symbol` / polygon / `Dict{Int,polygon}` | `nothing` | observation window for the uniform reference points (2D). `nothing` = data bbox; a `Vector{NTuple{2,Float64}}` = rejection-sample references inside it; `:metadata` = use `smld.metadata["edge_outer_polygon"]` (from `classify_emitters`); `Dict(dataset_id=>polygon)` = per dataset. Corrects false "clustered" on non-convex domains; incompatible with `use_3d=true` |
 
 **Validation:** `n_samples >= 1`, `random_repeats >= 1`, `n_samples <= n_points` per group
 (violations within a group return NaN for that group rather than erroring).
@@ -536,9 +537,10 @@ Abstract supertype; each strategy is a concrete subtype dispatched as a
 | Field | Type | Meaning |
 |-------|------|---------|
 | `class` | `Vector{Symbol}` | authoritative per-emitter class (`:outside`/`:membrane`/`:interior`) |
-| `inside_outer` | `BitVector` | **geometric** containment in the alpha outer loop |
-| `dist_to_outer_um` | `Vector{Float64}` | distance to the outer polygon; `NaN` if not inside |
-| `outer_polygon`, `loops`, `loop_diagnostics` | — | boundary geometry + per-loop diagnostics |
+| `inside_outer` | `BitVector` | **geometric** containment in the *classification* loop `loops[1]` |
+| `dist_to_outer_um` | `Vector{Float64}` | distance to that classification loop; `NaN` if not inside |
+| `outer_polygon` | polygon | **published** boundary: un-reflected footprint alpha-shape, **FOV-clipped** (drawn boundary + Hopkins `region=:metadata` window) |
+| `loops`, `loop_diagnostics` | — | reflected/FOV-augmented loops (`loops[1]` = labeling boundary) + per-loop diagnostics |
 | `config` | concrete config | provenance |
 | `n_outside` / `n_membrane` / `n_interior` | `Int` | class counts |
 
@@ -546,6 +548,10 @@ Accessors: `in_cell(info)` (= `class .!= :outside`), `interior_fraction(info)`.
 **Filter on `class`, never `inside_outer`.** For `KdeValleyConfig` the enclosure stage
 folds enclosed background into `:interior` while `inside_outer` stays geometric, so the
 enclosure-recovered set is exactly `class == :interior && inside_outer == false`.
+**Two boundaries:** `outer_polygon` is the published footprint (un-reflected,
+FOV-clipped) used for drawing + the Hopkins window and follows real concavities;
+`loops[1]` is the reflected classification loop that `inside_outer`/`dist`/`membrane`
+are measured against. They coincide when no FOV side is truncated.
 
 ### `OuterPolygonConfig <: AbstractEdgeClassifyConfig`
 

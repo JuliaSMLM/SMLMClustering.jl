@@ -47,6 +47,14 @@ Repeats are averaged.
   reported `statistic` is the mean across datasets and the full per-dataset
   vector is placed in `extras[:hopkins_per_dataset]`. When `false`, all
   emitters are pooled and a single H is returned.
+- `region = nothing`: observation window for the uniform **reference** points
+  (2D only). Hopkins is window-sensitive — sampling references over the data
+  bounding box makes data that is uniform inside a non-convex boundary read as
+  *falsely* clustered. Options: `nothing` → the data bounding box (default); a
+  polygon `Vector{NTuple{2,Float64}}` → references are rejection-sampled inside it;
+  `:metadata` → use the polygon at `smld.metadata["edge_outer_polygon"]` (written
+  by `classify_emitters` — the pipeline channel); `Dict(dataset_id => polygon)` →
+  one polygon per dataset (`per_dataset = true`). Incompatible with `use_3d = true`.
 
 # Interpretation
 - `H ≈ 0.5`: data is consistent with uniform spatial randomness (Poisson)
@@ -69,45 +77,100 @@ Base.@kwdef struct HopkinsConfig <: AbstractStatisticsConfig
     seed::Union{Int,Nothing} = nothing
     use_3d::Bool = false
     per_dataset::Bool = true
+    region::Union{Nothing,Symbol,Vector{NTuple{2,Float64}},Vector{CellPolygon},Dict{Int,Vector{NTuple{2,Float64}}}} = nothing
+end
+
+# Reference-region membership + bounding box, for either a single polygon or a
+# multi-cell mask used as a Hopkins observation window.
+_region_contains(region::Vector{NTuple{2,Float64}}, x, y) = _point_in_polygon(x, y, region)
+_region_contains(region::AbstractVector{CellPolygon}, x, y) = in_region(x, y, region)
+
+function _region_bbox(region::Vector{NTuple{2,Float64}})
+    lox = loy = Inf; hix = hiy = -Inf
+    @inbounds for (vx, vy) in region
+        lox = min(lox, vx); hix = max(hix, vx); loy = min(loy, vy); hiy = max(hiy, vy)
+    end
+    return lox, hix, loy, hiy
+end
+function _region_bbox(region::AbstractVector{CellPolygon})
+    lox = loy = Inf; hix = hiy = -Inf
+    @inbounds for cell in region
+        for (vx, vy) in cell.outer
+            lox = min(lox, vx); hix = max(hix, vx); loy = min(loy, vy); hiy = max(hiy, vy)
+        end
+    end
+    return lox, hix, loy, hiy
 end
 
 # Compute Hopkins H on a single d×n coordinate matrix using a supplied RNG.
-# Returns NaN when `n < 2` or `n_samples > n` (caller decides how to aggregate).
-function _hopkins_one_group(X::Matrix{Float64}, n_samples::Int, repeats::Int, rng)
+# `region`, when given, is a 2D polygon: reference points are rejection-sampled
+# inside it (the correct observation window) instead of the data bounding box, so
+# data that is uniform but confined to a non-convex domain no longer reads as
+# falsely clustered. Returns NaN when `n < 2`, `n_samples > n`, the sampling
+# envelope is degenerate, or (region mode) a reference point cannot be placed
+# inside the polygon within the attempt cap.
+function _hopkins_one_group(X::Matrix{Float64}, n_samples::Int, repeats::Int, rng;
+                            region::Union{Nothing,Vector{NTuple{2,Float64}},
+                                          Vector{CellPolygon}} = nothing)
     d, n = size(X)
     (n >= 2 && n_samples <= n) || return NaN
 
-    # Bounding box of the group.
+    # Reference-sampling envelope: the data bounding box by default, or the region's
+    # bounding box (with rejection back into the region) in region mode. The region
+    # is a single polygon or a multi-cell mask; 2D — use_3d is guarded upstream, so
+    # d == 2 whenever region !== nothing.
+    use_region = region !== nothing
     lo = Vector{Float64}(undef, d)
     hi = Vector{Float64}(undef, d)
-    @inbounds for k in 1:d
-        col = @view X[k, :]
-        lo[k] = minimum(col)
-        hi[k] = maximum(col)
+    if use_region
+        lox, hix, loy, hiy = _region_bbox(region)
+        lo[1] = lox; lo[2] = loy; hi[1] = hix; hi[2] = hiy
+    else
+        @inbounds for k in 1:d
+            col = @view X[k, :]
+            lo[k] = minimum(col)
+            hi[k] = maximum(col)
+        end
     end
     extent = hi .- lo
-    # Degenerate bbox (all points coincident in some axis): zero-volume box,
-    # uniform sampling is degenerate. Return NaN — callers can interpret.
+    # Degenerate envelope (zero-extent bbox, or zero-area polygon bbox): uniform
+    # sampling is undefined. Return NaN — callers can interpret.
     any(==(0.0), extent) && return NaN
+
+    # Cap rejection attempts per reference point so a thin/near-empty polygon can't
+    # hang; on exhaustion the group's H is NaN.
+    max_attempts = use_region ? 1000 : 1
 
     tree = KDTree(X)
     Hs = Vector{Float64}(undef, repeats)
 
     # Workspace for sampling n_samples indices without replacement via partial
-    # Fisher-Yates. Allocated once per group (was once per repeat, via
-    # randperm(rng, n)[1:n_samples] which materializes a length-n permutation
-    # then slices — wasteful for n ≫ n_samples, e.g. 100k-emitter cells).
+    # Fisher-Yates. Allocated once per group.
     workspace = collect(1:n)
 
     for r in 1:repeats
         u_sum = 0.0
         w_sum = 0.0
 
-        # 1. Reference points: uniform in bbox; NN to data.
+        # 1. Reference points: uniform in the envelope; NN to data. In region mode,
+        # reject samples that fall outside the polygon.
         for _ in 1:n_samples
             ref = Vector{Float64}(undef, d)
-            @inbounds for k in 1:d
-                ref[k] = lo[k] + extent[k] * rand(rng)
+            if use_region
+                placed = false
+                for _ in 1:max_attempts
+                    @inbounds ref[1] = lo[1] + extent[1] * rand(rng)
+                    @inbounds ref[2] = lo[2] + extent[2] * rand(rng)
+                    if _region_contains(region, ref[1], ref[2])
+                        placed = true
+                        break
+                    end
+                end
+                placed || return NaN
+            else
+                @inbounds for k in 1:d
+                    ref[k] = lo[k] + extent[k] * rand(rng)
+                end
             end
             _, dists = NearestNeighbors.knn(tree, ref, 1, true)
             u_sum += dists[1]^d
@@ -136,6 +199,63 @@ function _hopkins_one_group(X::Matrix{Float64}, n_samples::Int, repeats::Int, rn
     return sum(Hs) / repeats
 end
 
+# Validate a Hopkins region polygon.
+function _check_hopkins_polygon(p::Vector{NTuple{2,Float64}})
+    length(p) >= 3 ||
+        throw(ArgumentError("HopkinsConfig.region polygon needs ≥ 3 vertices (got $(length(p)))"))
+    all(t -> isfinite(t[1]) && isfinite(t[2]), p) ||
+        throw(ArgumentError("HopkinsConfig.region polygon has non-finite vertices"))
+    return nothing
+end
+
+# Resolve cfg.region into one polygon (or nothing) per group, aligned with
+# `groups` (which _group_by_dataset returns in ascending dataset-id order).
+function _resolve_hopkins_regions(smld::SMLMData.BasicSMLD, cfg::HopkinsConfig, groups)
+    ng = length(groups)
+    T = Union{Nothing,Vector{NTuple{2,Float64}},Vector{CellPolygon}}
+    r = cfg.region
+    r === nothing && return T[nothing for _ in 1:ng]
+    if r === :metadata
+        # Prefer the published multi-cell mask; fall back to the single dominant-cell polygon.
+        cells = get(smld.metadata, "edge_cells", nothing)
+        if cells isa Vector{CellPolygon} && !isempty(cells)
+            return T[cells for _ in 1:ng]
+        end
+        poly = get(smld.metadata, "edge_outer_polygon", nothing)
+        poly isa Vector{NTuple{2,Float64}} ||
+            throw(ArgumentError("HopkinsConfig.region=:metadata requires " *
+                "smld.metadata[\"edge_cells\"]::Vector{CellPolygon} or " *
+                "smld.metadata[\"edge_outer_polygon\"]::Vector{NTuple{2,Float64}} " *
+                "(run classify_emitters upstream); got " *
+                (poly === nothing ? "nothing" : string(typeof(poly)))))
+        _check_hopkins_polygon(poly)
+        return T[poly for _ in 1:ng]
+    elseif r isa Vector{CellPolygon}
+        isempty(r) && throw(ArgumentError("HopkinsConfig.region MultiCellMask is empty"))
+        return T[r for _ in 1:ng]
+    elseif r isa Vector{NTuple{2,Float64}}
+        _check_hopkins_polygon(r)
+        return T[r for _ in 1:ng]
+    elseif r isa Dict
+        cfg.per_dataset ||
+            throw(ArgumentError("HopkinsConfig.region as a Dict requires per_dataset=true"))
+        ids = sort!(unique(e.dataset for e in smld.emitters))
+        length(ids) == ng ||
+            error("HopkinsConfig.region Dict: dataset-id count ($(length(ids))) ≠ group count ($ng)")
+        out = T[nothing for _ in 1:ng]
+        @inbounds for (gi, did) in enumerate(ids)
+            haskey(r, did) ||
+                throw(ArgumentError("HopkinsConfig.region Dict has no polygon for dataset $did"))
+            _check_hopkins_polygon(r[did])
+            out[gi] = r[did]
+        end
+        return out
+    else
+        throw(ArgumentError("HopkinsConfig.region: unsupported value of type $(typeof(r)); use " *
+            "nothing, :metadata, a Vector{NTuple{2,Float64}}, or a Dict{Int,Vector{NTuple{2,Float64}}}"))
+    end
+end
+
 function cluster_statistics(smld::SMLMData.BasicSMLD, cfg::HopkinsConfig)
     t0 = time_ns()
     n_in = length(smld.emitters)
@@ -143,10 +263,13 @@ function cluster_statistics(smld::SMLMData.BasicSMLD, cfg::HopkinsConfig)
         throw(ArgumentError("HopkinsConfig.n_samples must be ≥ 1 (got $(cfg.n_samples))"))
     cfg.random_repeats >= 1 ||
         throw(ArgumentError("HopkinsConfig.random_repeats must be ≥ 1 (got $(cfg.random_repeats))"))
+    (cfg.use_3d && cfg.region !== nothing) &&
+        throw(ArgumentError("HopkinsConfig: `region` (a 2D polygon) is not supported with use_3d=true"))
 
     rng = cfg.seed === nothing ? Random.default_rng() : Xoshiro(cfg.seed)
 
     groups = _group_by_dataset(smld, cfg.per_dataset)
+    regions = _resolve_hopkins_regions(smld, cfg, groups)
 
     extras = Dict{Symbol,Any}()
     if cfg.per_dataset
@@ -158,7 +281,8 @@ function cluster_statistics(smld::SMLMData.BasicSMLD, cfg::HopkinsConfig)
             end
             sub = view(smld.emitters, idxs)
             X = _coords_matrix(sub, cfg.use_3d)
-            per_ds[gi] = _hopkins_one_group(X, cfg.n_samples, cfg.random_repeats, rng)
+            per_ds[gi] = _hopkins_one_group(X, cfg.n_samples, cfg.random_repeats, rng;
+                                            region = regions[gi])
         end
         extras[:hopkins_per_dataset] = per_ds
         # Mean across non-NaN datasets; if all NaN, statistic is NaN.
@@ -170,7 +294,8 @@ function cluster_statistics(smld::SMLMData.BasicSMLD, cfg::HopkinsConfig)
             H = NaN
         else
             X = _coords_matrix(smld.emitters, cfg.use_3d)
-            H = _hopkins_one_group(X, cfg.n_samples, cfg.random_repeats, rng)
+            H = _hopkins_one_group(X, cfg.n_samples, cfg.random_repeats, rng;
+                                   region = regions[1])
         end
     end
 

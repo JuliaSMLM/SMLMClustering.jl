@@ -235,6 +235,17 @@ println("per-dataset H = ", info.extras[:hopkins_per_dataset])
 Edge cases (empty group, `n_samples > n_points`, zero-extent bbox) return
 `NaN` for the affected group rather than erroring.
 
+**Bounded / non-convex domains.** Hopkins is observation-window sensitive: by default
+the uniform reference points are drawn over the data bounding box, so data that is
+uniform *inside a cell boundary* reads as falsely clustered. Pass a `region` polygon to
+confine the reference points to the actual domain — supply one explicitly, or use
+`:metadata` to read EdgeClassify's `edge_outer_polygon` straight off the SMLD:
+
+```julia
+cfg = HopkinsConfig(n_samples = 100, region = edge_info.outer_polygon)  # explicit
+cfg = HopkinsConfig(n_samples = 100, region = :metadata)                # pipeline channel
+```
+
 ### Voronoi density
 
 Per-emitter Voronoi cell area and corresponding local density `ρᵢ = 1/Aᵢ`,

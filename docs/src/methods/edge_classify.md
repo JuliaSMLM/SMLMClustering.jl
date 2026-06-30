@@ -102,9 +102,10 @@ core of both.
 | field | type | meaning |
 |---|---|---|
 | `class` | `Vector{Symbol}` | authoritative per-emitter answer: `:outside` / `:membrane` / `:interior` |
-| `inside_outer` | `BitVector` | **geometric** containment in the alpha outer loop |
-| `dist_to_outer_um` | `Vector{Float64}` | distance to the outer polygon; `NaN` when not inside |
-| `outer_polygon`, `loops` | polygons | the alpha outer loop + all loops |
+| `inside_outer` | `BitVector` | **geometric** containment in the *classification* loop `loops[1]` |
+| `dist_to_outer_um` | `Vector{Float64}` | distance to that classification loop; `NaN` when not inside |
+| `outer_polygon` | polygon | **published** boundary: un-reflected footprint alpha-shape, **FOV-clipped** |
+| `loops` | polygons | the reflected/FOV-augmented loops (`loops[1]` is the labeling boundary) |
 | `loop_diagnostics` | `Vector{LoopDiagnostic}` | per-loop diagnostics |
 | `config` | `C` | the concrete config that ran (provenance) |
 | `fov_um`, `truncated_sides`, `n_reflected`, `runtime_s` | — | run metadata |
@@ -112,6 +113,16 @@ core of both.
 
 Accessors: `in_cell(info)` = `info.class .!= :outside` (topological membership);
 `interior_fraction(info)`.
+
+!!! note "Two boundaries: published vs. classification"
+    `outer_polygon` is the **published** cell boundary — the alpha-shape of the
+    tissue-masked emitters built *without* FOV reflection and clipped to the field
+    of view, so it traces real concavities/bays and never escapes the FOV. It is
+    what's drawn and what Hopkins `region = :metadata` samples. The internal
+    **classification** boundary is `loops[1]` (the reflected / FOV-augmented loop):
+    reflection keeps a cell cut by the FOV edge from being mislabeled as membrane,
+    so `inside_outer`, `dist_to_outer_um`, and the `membrane` band are measured
+    against it. The two coincide when no FOV side is truncated.
 
 **Class semantics.** `class` is the canonical answer — **filter on `class`, never on
 `inside_outer`**. For `OuterPolygonConfig`, `inside_outer` is geometric for every

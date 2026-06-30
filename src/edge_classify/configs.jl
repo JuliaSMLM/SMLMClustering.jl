@@ -30,6 +30,14 @@ Base.@kwdef struct OuterPolygonConfig <: AbstractEdgeClassifyConfig
     fov_trunc_tol_nm::Float64  = 150.0
     k_list::Tuple{Vararg{Int}} = (16, 128)   # immutable → provenance-safe
     rho_k_thresh::Float64      = 200.0
+    # multi-cell mask pipeline (shared with KdeValleyConfig)
+    core_frac::Float64         = 0.10        # relative-density gate (0 disables)
+    core_radius_nm::Float64    = 600.0       # gate neighborhood radius
+    alpha_adaptive::Bool       = true        # multi-scale α (local carver ∩ per-cell envelope)
+    alpha_knn::Int             = 5           # k for the adaptive-α length scale
+    alpha_scale::Float64       = 2.0         # ×local k-NN (carver) and ×cell-median (envelope)
+    keep_internal::Bool        = false       # keep internal holes (else solid cells)
+    min_cell_frac::Float64     = 1/3         # drop cells < frac × largest (0 keeps all)
 end
 
 """
@@ -55,6 +63,14 @@ Base.@kwdef struct KdeValleyConfig <: AbstractEdgeClassifyConfig
     footprint_closing_px::Int  = 3
     enclosure_bin_um::Float64  = 0.2
     enclosure_min_hits::Int    = 6
+    # multi-cell mask pipeline (shared with OuterPolygonConfig)
+    core_frac::Float64         = 0.10        # relative-density gate (0 disables)
+    core_radius_nm::Float64    = 600.0       # gate neighborhood radius
+    alpha_adaptive::Bool       = true        # multi-scale α (local carver ∩ per-cell envelope)
+    alpha_knn::Int             = 5           # k for the adaptive-α length scale
+    alpha_scale::Float64       = 2.0         # ×local k-NN (carver) and ×cell-median (envelope)
+    keep_internal::Bool        = false       # keep internal holes (else solid cells)
+    min_cell_frac::Float64     = 1/3         # drop cells < frac × largest (0 keeps all)
 end
 
 # ---- validation (per type; called once at dispatch entry) --------------------
@@ -64,6 +80,11 @@ function _validate_geom(c::AbstractEdgeClassifyConfig)
     c.membrane_nm >= 0       || throw(ArgumentError("membrane_nm must be >= 0; got $(c.membrane_nm)"))
     c.reflect_radius_nm >= 0 || throw(ArgumentError("reflect_radius_nm must be >= 0; got $(c.reflect_radius_nm)"))
     c.fov_trunc_tol_nm >= 0  || throw(ArgumentError("fov_trunc_tol_nm must be >= 0; got $(c.fov_trunc_tol_nm)"))
+    (0 <= c.core_frac <= 1)  || throw(ArgumentError("core_frac must be in [0,1]; got $(c.core_frac)"))
+    c.core_radius_nm > 0     || throw(ArgumentError("core_radius_nm must be > 0; got $(c.core_radius_nm)"))
+    c.alpha_knn >= 1         || throw(ArgumentError("alpha_knn must be >= 1; got $(c.alpha_knn)"))
+    c.alpha_scale > 0        || throw(ArgumentError("alpha_scale must be > 0; got $(c.alpha_scale)"))
+    (0 <= c.min_cell_frac < 1) || throw(ArgumentError("min_cell_frac must be in [0,1); got $(c.min_cell_frac)"))
     return nothing
 end
 
@@ -110,6 +131,7 @@ method_name(::KdeValleyConfig)    = "kde_valley"
 # Density threshold for the loop-diagnostic `frac_dense` column (OuterPolygonConfig
 # only; kde runs the polygon core on a footprint subset via an OuterPolygonConfig).
 _diag_density_thresh(c::OuterPolygonConfig) = c.rho_k_thresh
+_diag_density_thresh(::KdeValleyConfig) = 0.0   # KDE gate selects tissue; no rho_k
 
 # Serialization: UPPERCASE on-disk param dict + the write-only METHOD wire value.
 function _geom_dict(c::AbstractEdgeClassifyConfig)
@@ -119,6 +141,13 @@ function _geom_dict(c::AbstractEdgeClassifyConfig)
         "MEMBRANE_NM"       => c.membrane_nm,
         "REFLECT_RADIUS_NM" => c.reflect_radius_nm,
         "FOV_TRUNC_TOL_NM"  => c.fov_trunc_tol_nm,
+        "CORE_FRAC"         => c.core_frac,
+        "CORE_RADIUS_NM"    => c.core_radius_nm,
+        "ALPHA_ADAPTIVE"    => c.alpha_adaptive,
+        "ALPHA_KNN"         => c.alpha_knn,
+        "ALPHA_SCALE"       => c.alpha_scale,
+        "KEEP_INTERNAL"     => c.keep_internal,
+        "MIN_CELL_FRAC"     => c.min_cell_frac,
     )
 end
 

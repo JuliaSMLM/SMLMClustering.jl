@@ -36,10 +36,12 @@ export AbstractClusterConfig, ClusterInfo, cluster,
        calibrate_regime_thresholds,
        PointHysteresisConfig,
        AbstractStatisticsConfig, ClusterStatisticsInfo, cluster_statistics,
-       HopkinsConfig, VoronoiDensityConfig, LocalContrastFeature
+       HopkinsConfig, VoronoiDensityConfig, LocalContrastFeature,
+       CellPolygon, MultiCellMask, build_mask, in_region, region_area
 
 include("types.jl")
 include("utils.jl")
+include("region.jl")
 include("backends/dbscan.jl")
 include("backends/hdbscan.jl")
 include("backends/hierarchical.jl")

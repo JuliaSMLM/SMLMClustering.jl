@@ -3,10 +3,13 @@
     classify_emitters(x_um, y_um, cfg::AbstractEdgeClassifyConfig; fov_um) -> info
 
 Classify each emitter as `:outside`, `:membrane`, or `:interior`. The concrete
-config type selects the strategy by dispatch (`OuterPolygonConfig`, `KdeValleyConfig`).
+config type selects the **tissue gate** by dispatch (`OuterPolygonConfig`,
+`KdeValleyConfig`); the rest of the pipeline is shared.
 
 The SMLD method follows the package `(out, Info)` convention: it returns the smld
-(with the primary class mirrored into `smld.metadata["edge_classify_class"]`) and an
+(with the primary class mirrored into `smld.metadata["edge_classify_class"]`, the
+published multi-cell mask into `smld.metadata["edge_cells"]`, and the dominant
+cell's outer ring into `smld.metadata["edge_outer_polygon"]`) and an
 [`EdgeClassifyInfo`](@ref). The coordinate method is the computational core and
 returns the `info` directly; `fov_um = (xmin, xmax, ymin, ymax)` in µm.
 """
@@ -21,6 +24,8 @@ function classify_emitters(smld::SMLMData.BasicSMLD, cfg::AbstractEdgeClassifyCo
     info = classify_emitters(x, y, cfg; fov_um = fov)
     meta = copy(smld.metadata)
     meta["edge_classify_class"] = String.(info.class)
+    meta["edge_cells"] = info.cells                  # multi-cell mask (primary downstream output)
+    meta["edge_outer_polygon"] = info.outer_polygon  # dominant cell outer (back-compat)
     smld_out = SMLMData.BasicSMLD(smld.emitters, smld.camera, smld.n_frames,
                                   smld.n_datasets, meta)
     return smld_out, info
@@ -42,36 +47,85 @@ function classify_emitters(x_um::AbstractVector{<:Real}, y_um::AbstractVector{<:
     return _build_info(raw, cfg, fov, t0)
 end
 
-# ---- outer_polygon: the pure core (no Info, no IO, no runtime) ---------------
+# ---- the shared multi-cell pipeline ------------------------------------------
 #
-# Faithful transcription of the v1 flow: reflect → build Xfull (originals then
-# reflected) → multi-K tissue mask → alpha-shape → point-in-polygon + membrane
-# band on ORIGINALS. The orchestration order + Xfull column layout are
-# parity-load-bearing.
-function _classify_polygon(x::Vector{Float64}, y::Vector{Float64},
-                           fov::NTuple{4,Float64}, cfg::OuterPolygonConfig)
+# tissue gate (per-config) → relative-density gate → density-adaptive α →
+# un-reflected alpha-shape loops → build_mask (split-to-simple + nesting + debris
+# cutoff) → per-emitter labeling against the multi-cell mask. The published mask is
+# the alpha-shape of the *observed* tissue (no FOV reflection); FOV-truncated
+# boundary segments are excluded from the membrane band, so a field-of-view cut is
+# never mislabeled as membrane.
+
+# Tissue-index selection — the only per-config step.
+function _tissue_indices(x::Vector{Float64}, y::Vector{Float64},
+                         fov::NTuple{4,Float64}, cfg::KdeValleyConfig)
+    fp = _kde_valley_footprint(x, y, cfg, fov)
+    return findall(fp)
+end
+function _tissue_indices(x::Vector{Float64}, y::Vector{Float64},
+                         fov::NTuple{4,Float64}, cfg::OuterPolygonConfig)
     n = length(x)
-    sides = _truncated_sides(x, y, fov, cfg.fov_trunc_tol_nm / 1000)
-    xfull, yfull, n_reflected = _reflect_emitters(
-        x, y, fov, sides, cfg.reflect_radius_nm / 1000)
-    Xfull = Matrix{Float64}(undef, 2, length(xfull))
-    @inbounds for i in eachindex(xfull)
-        Xfull[1, i] = xfull[i]; Xfull[2, i] = yfull[i]
+    X = Matrix{Float64}(undef, 2, n)
+    @inbounds for i in 1:n
+        X[1, i] = x[i]; X[2, i] = y[i]
     end
+    tmask = _tissue_mask(X, cfg.k_list, cfg.rho_k_thresh)
+    return findall(tmask)
+end
 
-    tmask = _tissue_mask(Xfull, cfg.k_list, cfg.rho_k_thresh)
-    Xc = Xfull[:, findall(tmask)]
-    loops = _alpha_shape_loops(Xc, cfg.alpha_nm / 1000)
-    # Load-bearing: degenerate / too-sparse clouds (<3 distinct points, collinear,
-    # or no alpha-connected boundary) yield empty loops — this is where the
-    # "too sparse to bound" error contract is enforced (the triangulation engine
-    # itself must never be relied on to throw; _alpha_shape_loops guards it).
+function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
+                   cfg::AbstractEdgeClassifyConfig)
+    n = length(x)
+    n == 0 && throw(ErrorException("$(method_name(cfg)): no emitters to classify"))
+
+    idx0 = _tissue_indices(x, y, fov, cfg)
+    isempty(idx0) && throw(ErrorException(
+        "$(method_name(cfg)): density/footprint gate produced empty tissue; " *
+        "cloud too sparse or parameters too strict"))
+
+    idx = _relative_core_filter(x, y, idx0, cfg.core_radius_nm / 1000, cfg.core_frac)
+    length(idx) >= 3 || throw(ErrorException(
+        "$(method_name(cfg)): too few tissue points after the relative-density gate " *
+        "(core_frac=$(cfg.core_frac)); cloud too sparse"))
+
+    # FOV-edge truncation from the GATED TISSUE (not raw emitters): a noise point on the
+    # edge must not mark a side truncated for a cell that doesn't reach it. Used below to
+    # exclude FOV-cut boundary segments from membrane labeling.
+    sides = _truncated_sides(view(x, idx), view(y, idx), fov, cfg.fov_trunc_tol_nm / 1000)
+
+    Xt = Matrix{Float64}(undef, 2, length(idx))
+    @inbounds for (k, i) in enumerate(idx)
+        Xt[1, k] = x[i]; Xt[2, k] = y[i]
+    end
+    # Collapse coincident localizations to distinct coordinates: duplicates don't change
+    # the boundary, but ≥alpha_knn copies of a point zero its k-NN spacing (→ adaptive
+    # α = 0 → valid triangles dropped → the shape collapses) and degrade the Delaunay.
+    # Labeling still runs over every original emitter (in_region below).
+    size(Xt, 2) > 1 && (Xt = unique(Xt; dims = 2))
+
+    if cfg.alpha_adaptive
+        # Multi-scale α: per triangle, min(local carver, conservative envelope).
+        # local = alpha_scale × local k-NN spacing (carves dense concavities, bridges
+        # sparse gaps); conservative = max(alpha_nm, alpha_scale × cell-median spacing),
+        # a per-cell cap whose alpha_nm floor stays loose enough to hold a diffuse
+        # background together yet rejects far-reaching low-density-noise protrusions.
+        kdist = _knn_distances(Xt, cfg.alpha_knn)
+        conservative_um = max(cfg.alpha_nm / 1000, cfg.alpha_scale * median(kdist))
+        loops = _local_alpha_shape_loops(Xt, kdist, cfg.alpha_scale, conservative_um)
+    else
+        loops = _alpha_shape_loops(Xt, cfg.alpha_nm / 1000)
+    end
     isempty(loops) && throw(ErrorException(
-        "no boundary loops found at alpha_nm=$(cfg.alpha_nm); " *
-        "check inputs or relax the alpha threshold"))
+        "$(method_name(cfg)): no boundary loops found " *
+        "(alpha_adaptive=$(cfg.alpha_adaptive)); check inputs or relax the alpha parameters"))
 
-    poly = loops[1]
-    class, inside_outer, dist = _label(x, y, poly, cfg.membrane_nm / 1000)
+    cells = build_mask(loops; keep_internal = cfg.keep_internal,
+                       min_cell_frac = cfg.min_cell_frac)
+    isempty(cells) && throw(ErrorException(
+        "$(method_name(cfg)): no cell survived the min_cell_frac=$(cfg.min_cell_frac) cutoff"))
+
+    class, inside_outer, dist =
+        _label_mask(x, y, cells, cfg.membrane_nm / 1000, fov, cfg.fov_trunc_tol_nm / 1000, sides)
 
     Xorig = Matrix{Float64}(undef, 2, n)
     @inbounds for i in 1:n
@@ -79,59 +133,26 @@ function _classify_polygon(x::Vector{Float64}, y::Vector{Float64},
     end
     loop_diags = _compute_loop_diagnostics(loops, x, y, Xorig, fov, _diag_density_thresh(cfg))
 
-    return (; class, inside_outer, dist, loops, poly, sides, n_reflected, loop_diags)
+    return (; class, inside_outer, dist, outer_polygon = cells[1].outer,
+            loops, cells, sides, n_reflected = 0, loop_diags)
 end
 
-_classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
-          cfg::OuterPolygonConfig) = _classify_polygon(x, y, fov, cfg)
+# ---- per-emitter labeling against the multi-cell mask ------------------------
 
-# ---- kde_valley: own gate + order; reuses the polygon core on the subset -----
-function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
-                   cfg::KdeValleyConfig)
-    n = length(x)
-    fp = _kde_valley_footprint(x, y, cfg, fov)
-    any(fp) || throw(ErrorException(
-        "kde_valley: KDE-valley + footprint gate produced empty tissue " *
-        "(sigma_nm=$(cfg.sigma_nm)); cloud too sparse or sigma too small"))
-    idx = findall(fp)
-
-    # Polygon geometry on the footprint subset. Empty k_list = internal density
-    # gate OFF (no k-NN; the KDE gate already selected tissue). Shared α=600.
-    sub = OuterPolygonConfig(alpha_nm = cfg.alpha_nm, membrane_nm = cfg.membrane_nm,
-                             reflect_radius_nm = cfg.reflect_radius_nm,
-                             fov_trunc_tol_nm = cfg.fov_trunc_tol_nm,
-                             k_list = (), rho_k_thresh = 0.0)
-    r = _classify_polygon(x[idx], y[idx], fov, sub)
-
-    class = fill(:outside, n)
-    inside_outer = falses(n)
-    dist = fill(NaN, n)
-    @inbounds for (k, i) in enumerate(idx)
-        class[i] = r.class[k]
-        inside_outer[i] = r.inside_outer[k]
-        dist[i] = r.dist[k]
-    end
-
-    _enclosure_fill!(class, x, y, cfg, fov)
-
-    return (; class, inside_outer, dist, loops = r.loops, poly = r.poly,
-            sides = r.sides, n_reflected = r.n_reflected, loop_diags = r.loop_diags)
-end
-
-# ---- shared helpers ----------------------------------------------------------
-
-# Point-in-polygon + membrane band on the ORIGINAL emitters. Threads into a
-# Vector{Bool} (one byte per element → race-free; a BitVector would race on
-# shared words at @threads chunk boundaries), then packs to a BitVector.
-function _label(x::Vector{Float64}, y::Vector{Float64},
-                poly::Vector{NTuple{2,Float64}}, membrane_um::Float64)
+# Interior iff inside a cell (and not in a kept hole); membrane iff interior and
+# within `membrane_um` of a REAL boundary segment (FOV-cut segments excluded);
+# else outside. Threads into a Vector{Bool} (one byte per element → race-free),
+# then packs to a BitVector.
+function _label_mask(x::Vector{Float64}, y::Vector{Float64}, cells::Vector{CellPolygon},
+                     membrane_um::Float64, fov::NTuple{4,Float64}, tol_um::Float64,
+                     sides::NamedTuple)
     n = length(x)
     inside = Vector{Bool}(undef, n)
     dist = fill(NaN, n)
     Threads.@threads for i in 1:n
-        if _point_in_polygon(x[i], y[i], poly)
+        if in_region(x[i], y[i], cells)
             inside[i] = true
-            dist[i] = _dist_to_polygon(x[i], y[i], poly)
+            dist[i] = _mask_membrane_dist(x[i], y[i], cells, fov, tol_um, sides)
         else
             inside[i] = false
         end
@@ -149,6 +170,23 @@ function _label(x::Vector{Float64}, y::Vector{Float64},
     return class, BitVector(inside), dist
 end
 
+# Distance from (qx,qy) to the nearest real (non-FOV-edge) boundary segment across
+# every cell's outer ring and its holes. Inf when the only nearby boundary is a
+# FOV cut (→ never membrane there).
+function _mask_membrane_dist(qx::Float64, qy::Float64, cells::Vector{CellPolygon},
+                             fov::NTuple{4,Float64}, tol_um::Float64, sides::NamedTuple)
+    best = Inf
+    @inbounds for cell in cells
+        d = _dist_to_ring_excl_fov(qx, qy, cell.outer, fov, tol_um, sides)
+        d < best && (best = d)
+        for h in cell.holes
+            dh = _dist_to_ring_excl_fov(qx, qy, h, fov, tol_um, sides)
+            dh < best && (best = dh)
+        end
+    end
+    return best
+end
+
 function _build_info(raw, cfg::AbstractEdgeClassifyConfig, fov::NTuple{4,Float64}, t0::UInt64)
     class = raw.class
     n = length(class)
@@ -164,7 +202,7 @@ function _build_info(raw, cfg::AbstractEdgeClassifyConfig, fov::NTuple{4,Float64
     end
     return EdgeClassifyInfo(
         n, class, raw.inside_outer, raw.dist,
-        raw.poly, raw.loops, raw.loop_diags,
+        raw.outer_polygon, raw.cells, raw.loops, raw.loop_diags,
         cfg, fov, raw.sides, raw.n_reflected, (time_ns() - t0) / 1e9,
         n_out, n_mem, n_int,
     )

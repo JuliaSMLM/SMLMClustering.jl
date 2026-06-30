@@ -61,7 +61,10 @@ function compute_concavity_metric(
     suspects = Int[]
     suspect_is_fov_edge = Bool[]
 
-    outer = info.outer_polygon
+    # The classification boundary (reflected loop), NOT info.outer_polygon — the
+    # latter is now the FOV-clipped published footprint, while dist_to_outer_um is
+    # measured against this loop, so the two must stay paired here.
+    outer = info.loops[1]
     no_outer = length(outer)
 
     @inbounds for i in 1:n

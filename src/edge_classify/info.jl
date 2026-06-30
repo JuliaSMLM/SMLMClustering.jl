@@ -55,15 +55,20 @@ end
 Result of `classify_emitters`. `class` is the authoritative per-emitter answer
 (`:outside`, `:membrane`, `:interior`), a partition of the input set.
 
-`inside_outer` is strictly **geometric** (containment in the alpha outer loop) with
-`dist_to_outer_um` its distance (`NaN` when not inside). For `OuterPolygonConfig`
-it is computed for every emitter. For `KdeValleyConfig` it is the geometry on the
-**footprint subset**: off-footprint emitters (gated out by the KDE valley) carry
-`inside_outer = false` / `dist = NaN`, and the enclosure stage then folds enclosed
-background into `class == :interior` — so the enclosure-recovered set is exactly
-`class == :interior && inside_outer == false`. Read `class` for the answer and
-`in_cell(info)` for topological membership; never filter on `inside_outer`.
+`cells::MultiCellMask` is the published mask: one `CellPolygon` (an outer ring plus
+optional internal holes) per distinct cell in the FOV, ordered largest-first. It is
+the drawn boundary and the Hopkins `region = :metadata` observation window.
+`outer_polygon` is `cells[1].outer` (the dominant cell's outer ring), retained for
+back-compat.
 
+`inside_outer` is geometric membership in the mask (`in_region(cells)`), and
+`dist_to_outer_um` is the distance to the nearest **real** boundary segment
+(`NaN` when not inside). Boundary segments lying on a truncated FOV edge are
+excluded from that distance, so a field-of-view cut is never labeled membrane —
+`membrane` is the band within `membrane_nm` of a real cell edge. `in_cell(info)`
+(`class .!= :outside`) equals `inside_outer`. Read `class` for the answer.
+
+`loops` are the raw alpha-shape boundary loops (serialized to `polygon_loops.tsv`);
 `config` holds the concrete config that ran (honest provenance).
 """
 struct EdgeClassifyInfo{C<:AbstractEdgeClassifyConfig} <: SMLMData.AbstractSMLMInfo
@@ -72,6 +77,7 @@ struct EdgeClassifyInfo{C<:AbstractEdgeClassifyConfig} <: SMLMData.AbstractSMLMI
     inside_outer::BitVector
     dist_to_outer_um::Vector{Float64}
     outer_polygon::Vector{NTuple{2,Float64}}
+    cells::MultiCellMask
     loops::Vector{Vector{NTuple{2,Float64}}}
     loop_diagnostics::Vector{LoopDiagnostic}
     config::C
@@ -87,9 +93,8 @@ end
 """
     in_cell(info) -> BitVector
 
-Topological cell membership, `== (info.class .!= :outside)`. For `KdeValleyConfig`
-this is a superset of `inside_outer` (includes enclosure-recovered interior); for
-`OuterPolygonConfig` it equals `inside_outer`.
+Topological cell membership, `== (info.class .!= :outside)`. Equals `inside_outer`
+(both are mask membership via `in_region`).
 """
 in_cell(info::EdgeClassifyInfo) = info.class .!= :outside
 

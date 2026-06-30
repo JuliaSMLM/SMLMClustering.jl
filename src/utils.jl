@@ -112,3 +112,20 @@ function _voronoi_areas(emitters::AbstractVector{<:SMLMData.AbstractEmitter})
     end
     return (areas, tri)
 end
+
+# Even-odd (ray-casting) point-in-polygon test for a closed 2D polygon given as a
+# vector of (x, y) vertices. Shared by EdgeClassify (boundary classification) and
+# the Hopkins backend (region-restricted reference sampling).
+function _point_in_polygon(qx::Float64, qy::Float64,
+                           verts::Vector{NTuple{2,Float64}})
+    n = length(verts); inside = false; j = n
+    @inbounds for i in 1:n
+        ix, iy = verts[i]; jx, jy = verts[j]
+        if (iy > qy) != (jy > qy)
+            xint = (jx - ix) * (qy - iy) / (jy - iy) + ix
+            qx < xint && (inside = !inside)
+        end
+        j = i
+    end
+    return inside
+end

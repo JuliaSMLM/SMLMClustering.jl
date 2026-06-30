@@ -16,6 +16,7 @@ using Random
         @test cfg.seed === nothing
         @test cfg.use_3d === false
         @test cfg.per_dataset === true
+        @test cfg.region === nothing
 
         cfg2 = HopkinsConfig(n_samples = 50, random_repeats = 5, seed = 42,
                              use_3d = true, per_dataset = false)
@@ -168,6 +169,13 @@ using Random
         smld = _make_2d_smld([(1.0, 1.0, 1), (2.0, 2.0, 1), (3.0, 3.0, 1)])
         @test_throws ArgumentError cluster_statistics(smld, HopkinsConfig(n_samples = 0))
         @test_throws ArgumentError cluster_statistics(smld, HopkinsConfig(random_repeats = 0))
+        tri = [(0.0, 0.0), (4.0, 0.0), (2.0, 4.0)]
+        # region (a 2D polygon) is incompatible with 3D
+        @test_throws ArgumentError cluster_statistics(smld, HopkinsConfig(use_3d = true, region = tri))
+        # :metadata requested but no polygon present
+        @test_throws ArgumentError cluster_statistics(smld, HopkinsConfig(region = :metadata, per_dataset = false))
+        # malformed polygon (< 3 vertices)
+        @test_throws ArgumentError cluster_statistics(smld, HopkinsConfig(region = [(0.0, 0.0), (1.0, 1.0)], per_dataset = false))
     end
 
     if SMLM_TEST_FULL
@@ -188,6 +196,38 @@ using Random
         cfg = HopkinsConfig(n_samples = 10, per_dataset = false)
         _, info = cluster_statistics(smld, cfg)
         @test isnan(info.statistic)
+    end
+    end  # SMLM_TEST_FULL
+
+    if SMLM_TEST_FULL
+    @testset "region restricts reference points to the polygon" begin
+        # Data uniform INSIDE a non-convex U-shape. bbox-sampled references land in
+        # the empty central notch → H falsely high; restricting references to the
+        # polygon recovers the random null (~0.5). Regression for the window bug.
+        poly = [(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (4.0, 5.0),
+                (4.0, 1.0), (1.0, 1.0), (1.0, 5.0), (0.0, 5.0)]
+        rng = Xoshiro(42)
+        pts = Tuple{Float64,Float64,Int}[]
+        while length(pts) < 2000
+            x = 5rand(rng); y = 5rand(rng)
+            SMLMClustering._point_in_polygon(x, y, poly) && push!(pts, (x, y, 1))
+        end
+        smld = _make_2d_smld(pts; n_datasets = 1)
+
+        base(; kw...) = HopkinsConfig(; n_samples = 150, random_repeats = 15,
+                                      seed = 1, per_dataset = false, kw...)
+        H_bbox   = cluster_statistics(smld, base())[2].statistic
+        H_region = cluster_statistics(smld, base(region = poly))[2].statistic
+        @test H_bbox > 0.6                 # falsely clustered without a region
+        @test 0.4 <= H_region <= 0.6       # random null once references are confined
+        @test H_bbox > H_region + 0.15     # relational, robust to constants
+
+        # metadata channel: the same polygon supplied via smld.metadata
+        smld_meta = SMLMData.BasicSMLD(smld.emitters, smld.camera, smld.n_frames,
+                                       smld.n_datasets,
+                                       Dict{String,Any}("edge_outer_polygon" => poly))
+        H_meta = cluster_statistics(smld_meta, base(region = :metadata))[2].statistic
+        @test 0.4 <= H_meta <= 0.6
     end
     end  # SMLM_TEST_FULL
 

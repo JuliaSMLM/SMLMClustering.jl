@@ -20,6 +20,7 @@ using AdaptivePredicates
 using Statistics
 using Dates
 import SMLMData
+import ..SMLMClustering: _point_in_polygon, build_mask, in_region, CellPolygon, MultiCellMask
 
 export classify_emitters,
        AbstractEdgeClassifyConfig,

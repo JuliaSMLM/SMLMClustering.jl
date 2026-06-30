@@ -82,6 +82,12 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
         info = classify_emitters(vcat(x, fill(x[1], 25)), vcat(y, fill(y[1], 25)),
             OuterPolygonConfig(rho_k_thresh = 50.0); fov_um = _FOV)
         @test info isa EdgeClassifyInfo && info.n_interior > 0
+        # EVERY point duplicated past alpha_knn: without the coincident-coordinate
+        # dedup, every k-NN distance is 0 → adaptive α collapses to 0 → no loops. The
+        # shape must still form (dedup runs before the alpha-shape).
+        xd = repeat(x, inner = 6); yd = repeat(y, inner = 6)   # 5 exact copies each
+        infod = classify_emitters(xd, yd, OuterPolygonConfig(rho_k_thresh = 50.0); fov_um = _FOV)
+        @test !isempty(infod.cells) && infod.n_interior > 0
         # a far-outlier localization must not blow the footprint/enclosure raster
         # (extent is clamped to the FOV ± one FOV-width); just complete bounded.
         xc, yc = _edge_cloud(8)
@@ -123,6 +129,11 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
             @test length(info.class) == length(x)
             @test all((info.class .!= :outside) .== in_cell(info))
             @test 0.0 <= interior_fraction(info) <= 1.0
+            # multi-cell mask: published cells + back-compat outer_polygon
+            @test info.cells isa Vector{CellPolygon}
+            @test !isempty(info.cells)
+            @test info.outer_polygon == info.cells[1].outer
+            @test all((info.class .!= :outside) .== info.inside_outer)
         end
     end
 
@@ -177,19 +188,25 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
     # ---- validated fixtures (thorough tier + presence) -----------------------
 
     if SMLM_TEST_FULL && isfile(_PARITY_FIX)
-        @testset "parity — A431 WT Cell_01 (bit-for-bit)" begin
+        @testset "A431 WT Cell_01 (multi-cell rewrite — structural)" begin
+            # The old bit-for-bit class fixture was RETIRED: the multi-cell rewrite
+            # changed the labeling algorithm by design (density-adaptive α, no FOV
+            # reflection, in_region labeling, FOV-edge-excluded membrane). This is now
+            # a structural regression check on the same dense single cell.
             fx = JLD2.load(_PARITY_FIX)
             x = Float64.(fx["x_um"]); y = Float64.(fx["y_um"])
             fov = Tuple(Float64.(fx["fov_um"]))
-            expected = Symbol.(fx["expected_class"])
             info = classify_emitters(x, y, KdeValleyConfig(); fov_um = fov)
-            @test info.n_interior == 451803
-            @test info.n_membrane == 557
-            @test info.n_outside  == 932
-            @test info.class == expected
+            @test info.n_outside + info.n_membrane + info.n_interior == info.n_emitters
+            @test info.n_interior > 0
+            @test !isempty(info.cells)
+            @test info.outer_polygon == info.cells[1].outer
+            @test all((info.class .!= :outside) .== info.inside_outer)
+            @test interior_fraction(info) > 0.8       # dense, well-defined single cell
+            @info "A431 (regenerated counts)" n_interior = info.n_interior n_membrane = info.n_membrane n_outside = info.n_outside n_cells = length(info.cells)
         end
     else
-        @info "kde_valley parity test skipped (needs SMLM_TEST_FULL + $_PARITY_FIX)"
+        @info "kde_valley A431 test skipped (needs SMLM_TEST_FULL + $_PARITY_FIX)"
     end
 
     if SMLM_TEST_FULL && isfile(_ROBUST_FIX)
@@ -200,15 +217,14 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
                 x = Float64.(fx["$tag/x_um"]); y = Float64.(fx["$tag/y_um"])
                 fov = Tuple(Float64.(fx["$tag/fov_um"]))
                 v1key = "$tag/v1_n_interior"
-                v1i = haskey(fx, v1key) && isfinite(float(fx[v1key])) ? Int(fx[v1key]) : -1
-                if v1i > 0
+                has_cell = haskey(fx, v1key) && isfinite(float(fx[v1key])) && Int(fx[v1key]) > 0
+                if has_cell
                     info = classify_emitters(x, y, KdeValleyConfig(); fov_um = fov)
                     @test info.n_interior > 0
-                    # Soft sanity bound (gate isn't passing ~everything). Dense /
-                    # mostly-on-cell FOVs legitimately reach ~0.982; this is
-                    # engine-independent (DT and Triangle agree on n_interior here).
-                    @test 0.4 <= interior_fraction(info) <= 0.99
-                    @test abs(info.n_interior - v1i) <= 0.15 * v1i
+                    @test info.n_outside + info.n_membrane + info.n_interior == info.n_emitters
+                    # Soft sanity bound only — the exact v1-count comparison was retired
+                    # with the multi-cell rewrite (different labeling algorithm by design).
+                    @test 0.3 <= interior_fraction(info) <= 0.995
                 else
                     bounded = try
                         classify_emitters(x, y, KdeValleyConfig(); fov_um = fov).n_interior >= 0

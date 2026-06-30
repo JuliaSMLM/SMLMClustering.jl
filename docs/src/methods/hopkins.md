@@ -62,6 +62,7 @@ independent repeats.
 | `seed` | `nothing` | — | when set (`Int`), seeds an internal `Xoshiro` for reproducibility; when `nothing`, uses the global RNG |
 | `use_3d` | `false` | — | include the z-coordinate and use $d = 3$ in the formula |
 | `per_dataset` | `true` | — | when `true`, compute Hopkins per dataset and report the across-dataset mean as `statistic`; when `false`, pool all emitters into a single $H$ |
+| `region` | `nothing` | — | observation window for the uniform **reference** points (2D). `nothing` = data bounding box; a polygon `Vector{NTuple{2,Float64}}` = rejection-sample references inside it; `:metadata` = read `smld.metadata["edge_outer_polygon"]` (written by `classify_emitters`); `Dict(dataset_id => polygon)` = per dataset. Incompatible with `use_3d = true` |
 
 Validated at dispatch entry: `n_samples ≥ 1` and `random_repeats ≥ 1`, else an
 `ArgumentError` is raised.
@@ -119,6 +120,13 @@ With `per_dataset = true`, a `NaN` group is recorded in
 
 ## Notes & caveats
 
+- **Observation window (the `region` field).** Hopkins is **window-sensitive** — its
+  null is "uniform *within a stated window*", and the reference points define that
+  window. The default window is the data bounding box, so data that is uniform but
+  confined to a **non-convex boundary** (e.g. a cell) reads as falsely *clustered*:
+  bbox references fall in the empty corners, far from any data, inflating $H$. Pass a
+  `region` polygon (or `:metadata` to use EdgeClassify's `edge_outer_polygon`) to
+  sample references inside the actual domain and recover the correct null.
 - **Sampling variance.** $H$ is a Monte-Carlo estimate: each call draws random
   reference and sample points, so successive runs differ. Raise `random_repeats`
   to average the variance down (linear cost), and set `seed` to make a run
