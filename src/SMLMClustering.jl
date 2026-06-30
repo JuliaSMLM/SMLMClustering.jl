@@ -66,4 +66,8 @@ export classify_emitters,
        in_cell, interior_fraction, method_name, write_edge_artifacts,
        compute_concavity_metric, ConcavityMetricReport
 
+include("viz.jl")   # edge-mask report (core) + figure stubs (methods in ext/)
+export EdgeReport, compute_edge_report, write_edge_report,
+       plot_edge_report, render_classes, class_codes
+
 end

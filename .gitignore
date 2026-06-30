@@ -24,3 +24,6 @@
 /STATUS.md
 /rounds/
 .sot/
+
+# keep committed doc figures (the edge-report ext output)
+!docs/src/assets/**/*.png
