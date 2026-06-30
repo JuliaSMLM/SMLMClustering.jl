@@ -24,32 +24,35 @@ returns the composed image.
 Requires both `CairoMakie` and `SMLMRender` loaded (this `SMLMClusteringFiguresExt`).
 """
 function SMLMClustering.render_classes(smld, class::AbstractVector;
-        extra = [], zoom = 20, radius_factor = 20, line_width = 1, filename = nothing)
+        extra = [], zoom = 20, radius_factor = 20, line_width = 1, strategy = nothing,
+        normalize_each = true, clip_percentile = 0.995, filename = nothing)
     length(class) == length(smld.emitters) ||
         throw(ArgumentError("class length $(length(class)) ≠ n emitters $(length(smld.emitters))"))
-    target = create_target_from_smld(smld; zoom = zoom)
-    strat = CircleRender(; radius_factor = radius_factor, line_width = line_width,
-                         use_localization_precision = true)
-    layers = Tuple{Any, Any}[]
+    strat = strategy === nothing ?
+        CircleRender(; radius_factor = radius_factor, line_width = line_width,
+                     use_localization_precision = true) :
+        strategy
+    subs = Any[]; cols = Any[]
     for (cl, col) in _CLASS_RENDER
-        push!(layers, (class .== cl, col))
+        m = class .== cl
+        any(m) || continue
+        push!(subs, SMLMData.BasicSMLD(smld.emitters[m], smld.camera, smld.n_frames, smld.n_datasets))
+        push!(cols, col)
     end
     for (mask, col, _name) in extra
-        push!(layers, (collect(Bool, mask), col))
+        m = collect(Bool, mask)
+        any(m) || continue
+        push!(subs, SMLMData.BasicSMLD(smld.emitters[m], smld.camera, smld.n_frames, smld.n_datasets))
+        push!(cols, col)
     end
-    imgs = Any[]
-    for (mask, col) in layers
-        any(mask) || continue
-        sub = SMLMData.BasicSMLD(smld.emitters[mask], smld.camera,
-                                 smld.n_frames, smld.n_datasets)
-        (img, _) = render(sub; strategy = strat, color = col, target = target,
-                          clip_percentile = nothing)
-        push!(imgs, img)
-    end
-    isempty(imgs) && throw(ArgumentError("render_classes: no emitters to render"))
-    composed = length(imgs) == 1 ? imgs[1] : compose(imgs...)
-    filename === nothing || save_image(filename, composed)
-    return composed
+    isempty(subs) && throw(ArgumentError("render_classes: no emitters to render"))
+    # Multi-SMLD overlay: clip+normalize EACH class layer to full brightness then
+    # composite. The single-color ManualColorMapping path ignores clip/normalize (which
+    # leaves a Gaussian render black) — the overlay path is the right tool for class color.
+    (img, _) = render(subs; colors = cols, strategy = strat, zoom = zoom,
+                      normalize_each = normalize_each, clip_percentile = clip_percentile)
+    filename === nothing || save_image(filename, img)
+    return img
 end
 
 # ---- CairoMakie overlay + class-fraction panel ------------------------------
@@ -101,10 +104,13 @@ end
         -> Vector{String}
 
 Write the standard edge-mask figure series into `output_dir`, returning the saved
-paths: `<prefix>_classes.png` (SMLMRender class image), `<prefix>_overlay.png`
+paths: `<prefix>_classes.png` (SMLMRender CircleRender QC view — emitters sized by
+precision), `<prefix>_render.png` (SMLMRender Gaussian SR at the same zoom and class
+colors — the prettier downstream-style diagnostic), `<prefix>_overlay.png`
 (CairoMakie polygon overlay over class-colored localizations) and
-`<prefix>_fractions.png` (class-fraction bar). `zoom_render` sets the class-render
-resolution; `zoom_overlay` is reserved for a future render-backed overlay variant.
+`<prefix>_fractions.png` (class-fraction bar). `zoom_render` sets the render
+resolution (e.g. 20 ≈ 5 nm/px for a ~100 nm camera); `zoom_overlay` is reserved for
+a future render-backed overlay variant.
 
 Requires both `CairoMakie` and `SMLMRender` loaded (this `SMLMClusteringFiguresExt`).
 """
@@ -112,9 +118,15 @@ function SMLMClustering.plot_edge_report(report::SMLMClustering.EdgeReport;
         output_dir::AbstractString, zoom_overlay = 10, zoom_render = 20, prefix = "edge")
     mkpath(output_dir)
     paths = String[]
-    pr = joinpath(output_dir, "$(prefix)_classes.png")
+    pr = joinpath(output_dir, "$(prefix)_classes.png")           # CircleRender QC view (per-emitter + precision)
     SMLMClustering.render_classes(report.smld, report.info.class; zoom = zoom_render, filename = pr)
     push!(paths, pr)
+    pg = joinpath(output_dir, "$(prefix)_render.png")            # Gaussian SR at zoom_render, same class colors
+    SMLMClustering.render_classes(report.smld, report.info.class; zoom = zoom_render,
+                                  strategy = GaussianRender(use_localization_precision = false,
+                                                            fixed_sigma = 5.0),
+                                  clip_percentile = 0.995, filename = pg)
+    push!(paths, pg)
     po = joinpath(output_dir, "$(prefix)_overlay.png"); _overlay(report, po); push!(paths, po)
     pf = joinpath(output_dir, "$(prefix)_fractions.png"); _fractions(report, pf); push!(paths, pf)
     return paths

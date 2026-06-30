@@ -26,7 +26,7 @@ export classify_emitters,
        AbstractEdgeClassifyConfig,
        OuterPolygonConfig, KdeValleyConfig,
        EdgeClassifyInfo, LoopDiagnostic,
-       in_cell, interior_fraction, method_name,
+       in_cell, interior_mask, interior_fraction, method_name,
        write_edge_artifacts,
        compute_concavity_metric, ConcavityMetricReport
 

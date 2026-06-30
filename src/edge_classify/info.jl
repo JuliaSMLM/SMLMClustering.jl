@@ -99,6 +99,18 @@ Topological cell membership, `== (info.class .!= :outside)`. Equals `inside_oute
 in_cell(info::EdgeClassifyInfo) = info.class .!= :outside
 
 """
+    interior_mask(info) -> BitVector
+
+Per-emitter interior mask, `== (info.class .== :interior)` — the strictly-interior
+emitters (membrane and outside both excluded). Unlike [`in_cell`](@ref) (which keeps
+membrane), this is the subset a downstream analysis usually carries forward, and is
+the boolean to AND with any other per-emitter mask (e.g. a separate structure mask)
+before subsetting. `classify_emitters` stays non-destructive — it never drops
+emitters — so the caller composes masks and subsets once.
+"""
+interior_mask(info::EdgeClassifyInfo) = info.class .== :interior
+
+"""
     interior_fraction(info) -> Float64
 """
 interior_fraction(info::EdgeClassifyInfo) = info.n_interior / max(info.n_emitters, 1)
