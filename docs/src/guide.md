@@ -84,9 +84,9 @@ preserving the full result.
 smld, info = classify_emitters(smld, cfg)   # cfg :: AbstractEdgeClassifyConfig
 ```
 
-Pass-through; the per-emitter class is mirrored into
-`smld.metadata["edge_classify_class"]` and `info::EdgeClassifyInfo` carries
-`class::Vector{Symbol}` plus the boundary geometry. See
+Returns a **new** SMLD with the published mask threaded into
+`smld.metadata["edge_cells"]` / `["edge_outer_polygon"]`; the per-emitter class lives in
+`info::EdgeClassifyInfo` (`class::Vector{Symbol}`), read via `in_cell` / `interior_mask`. See
 [Edge / Membrane Classification](@ref).
 
 ## Shared configuration fields

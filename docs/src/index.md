@@ -51,8 +51,8 @@ edge.class             # Vector{Symbol}: :outside / :membrane / :interior
 written onto the copy's `emitter.id` (`0` = noise, `1..K` = clusters).
 `cluster_statistics` is **pass-through** — it returns the *same* SMLD reference
 unchanged alongside an info struct. `classify_emitters` returns a **new** SMLD (the
-input's metadata copied, with the per-emitter class added under
-`"edge_classify_class"`) alongside its info.
+input's metadata copied, with the published cell mask added under `"edge_cells"` /
+`"edge_outer_polygon"`) alongside its info, which carries the per-emitter class.
 
 ## Backend catalog
 

@@ -3,9 +3,11 @@ Result records for `classify_emitters`.
 
 `EdgeClassifyInfo <: SMLMData.AbstractSMLMInfo` is the sibling of `ClusterInfo` /
 `ClusterStatisticsInfo`. Because emitters have no categorical class field (unlike
-cluster `id`s), the canonical per-emitter answer lives here; `classify_emitters`
-on an SMLD also mirrors the primary `class` vector into
-`smld.metadata["edge_classify_class"]` for pipeline chaining.
+cluster `id`s), the canonical per-emitter answer lives here (`info.class`, with the
+`in_cell` / `interior_mask` accessors). It is deliberately *not* mirrored into the
+SMLD metadata — a per-emitter side-list would desync the moment a downstream step
+subsets emitters; consume it at the classify point. Only the per-cell mask GEOMETRY
+travels in metadata (`edge_cells`, `edge_outer_polygon`).
 """
 
 # Valid per-emitter class symbols (serialized as Strings on disk).
@@ -83,7 +85,6 @@ struct EdgeClassifyInfo{C<:AbstractEdgeClassifyConfig} <: SMLMData.AbstractSMLMI
     config::C
     fov_um::NTuple{4,Float64}
     truncated_sides::NamedTuple{(:L, :R, :B, :T), NTuple{4,Bool}}
-    n_reflected::Int
     runtime_s::Float64
     n_outside::Int
     n_membrane::Int

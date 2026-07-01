@@ -1,9 +1,9 @@
 """
-Internal geometry helpers for `EdgeClassify`: FOV reflection, multi-K
+Internal geometry helpers for `EdgeClassify`: FOV truncation, multi-K
 density, alpha-shape boundary loops, polygon point-in / distance.
 """
 
-# ---- FOV reflection ----------------------------------------------------------
+# ---- FOV truncation ----------------------------------------------------------
 
 function _truncated_sides(x_um, y_um, fov_um::NTuple{4,Float64}, tol_um::Float64)
     xmn, xmx = extrema(x_um); ymn, ymx = extrema(y_um)
@@ -12,30 +12,6 @@ function _truncated_sides(x_um, y_um, fov_um::NTuple{4,Float64}, tol_um::Float64
             R = (fxmax - xmx) <= tol_um,
             B = (ymn - fymin) <= tol_um,
             T = (fymax - ymx) <= tol_um)
-end
-
-function _reflect_emitters(x_um, y_um, fov_um::NTuple{4,Float64},
-                           sides::NamedTuple, max_dist_um::Float64)
-    fxmin, fxmax, fymin, fymax = fov_um
-    n = length(x_um)
-    refl_x = Float64[]; refl_y = Float64[]
-    @inbounds for i in 1:n
-        x, y = x_um[i], y_um[i]
-        in_l = sides.L && (x - fxmin) < max_dist_um
-        in_r = sides.R && (fxmax - x) < max_dist_um
-        in_b = sides.B && (y - fymin) < max_dist_um
-        in_t = sides.T && (fymax - y) < max_dist_um
-        if in_l; push!(refl_x, 2*fxmin - x); push!(refl_y, y); end
-        if in_r; push!(refl_x, 2*fxmax - x); push!(refl_y, y); end
-        if in_b; push!(refl_x, x); push!(refl_y, 2*fymin - y); end
-        if in_t; push!(refl_x, x); push!(refl_y, 2*fymax - y); end
-        if in_l && in_b; push!(refl_x, 2*fxmin - x); push!(refl_y, 2*fymin - y); end
-        if in_l && in_t; push!(refl_x, 2*fxmin - x); push!(refl_y, 2*fymax - y); end
-        if in_r && in_b; push!(refl_x, 2*fxmax - x); push!(refl_y, 2*fymin - y); end
-        if in_r && in_t; push!(refl_x, 2*fxmax - x); push!(refl_y, 2*fymax - y); end
-    end
-    xfull = vcat(x_um, refl_x); yfull = vcat(y_um, refl_y)
-    return xfull, yfull, length(refl_x)
 end
 
 # ---- Multi-K density ---------------------------------------------------------
@@ -133,12 +109,6 @@ function _polygon_area(verts::Vector{NTuple{2,Float64}})
     return s / 2
 end
 
-# A polygon is usable (drawable / a valid Hopkins window) only with ≥3 DISTINCT
-# vertices and a non-negligible area — Sutherland–Hodgman can emit duplicate
-# on-edge vertices, so a raw vertex count alone is not a sufficient guard.
-_valid_polygon(p::Vector{NTuple{2,Float64}}) =
-    length(unique(p)) >= 3 && abs(_polygon_area(p)) > 1e-9
-
 """
     _alpha_shape_loops(X, alpha_um) -> Vector{Vector{NTuple{2,Float64}}}
 
@@ -171,54 +141,6 @@ function _alpha_shape_loops(X::Matrix{Float64}, alpha_um::Float64)
     # be deterministic — the caller classifies against it).
     sort!(polys; by = p -> (-abs(_polygon_area(p)), minimum(p)), alg = MergeSort)
     return polys
-end
-
-# ---- FOV clipping (Sutherland–Hodgman) ---------------------------------------
-
-# Intersection of segment a→b with the vertical line x = xc (called only when a, b
-# straddle xc, so b[1] != a[1]); and with the horizontal line y = yc (b[2] != a[2]).
-_seg_x(a::NTuple{2,Float64}, b::NTuple{2,Float64}, xc::Float64) =
-    (xc, a[2] + (xc - a[1]) / (b[1] - a[1]) * (b[2] - a[2]))
-_seg_y(a::NTuple{2,Float64}, b::NTuple{2,Float64}, yc::Float64) =
-    (a[1] + (yc - a[2]) / (b[2] - a[2]) * (b[1] - a[1]), yc)
-
-# One Sutherland–Hodgman pass: keep the `inside` half-plane, inserting the
-# boundary intersection (`isect`) wherever the polygon edge crosses it.
-function _clip_halfplane(input::Vector{NTuple{2,Float64}}, inside, isect)
-    m = length(input)
-    out = NTuple{2,Float64}[]
-    m == 0 && return out
-    @inbounds for i in 1:m
-        cur = input[i]
-        prev = input[i == 1 ? m : i - 1]
-        cur_in = inside(cur); prev_in = inside(prev)
-        if cur_in
-            prev_in || push!(out, isect(prev, cur))
-            push!(out, cur)
-        elseif prev_in
-            push!(out, isect(prev, cur))
-        end
-    end
-    return out
-end
-
-"""
-    _fov_clip(poly, fov_um) -> Vector{NTuple{2,Float64}}
-
-Clip a closed polygon to the axis-aligned FOV rectangle
-`(xmin, xmax, ymin, ymax)` via Sutherland–Hodgman. The FOV is convex, so the
-result is the exact intersection `poly ∩ FOV`; vertices on an edge are kept.
-Returns an empty vector when the intersection is empty.
-"""
-function _fov_clip(poly::Vector{NTuple{2,Float64}}, fov_um::NTuple{4,Float64})
-    isempty(poly) && return poly
-    fxmin, fxmax, fymin, fymax = fov_um
-    out = poly
-    out = _clip_halfplane(out, p -> p[1] >= fxmin, (a, b) -> _seg_x(a, b, fxmin))
-    out = _clip_halfplane(out, p -> p[1] <= fxmax, (a, b) -> _seg_x(a, b, fxmax))
-    out = _clip_halfplane(out, p -> p[2] >= fymin, (a, b) -> _seg_y(a, b, fymin))
-    out = _clip_halfplane(out, p -> p[2] <= fymax, (a, b) -> _seg_y(a, b, fymax))
-    return out
 end
 
 # ---- Perpendicular distance to polygon ---------------------------------------

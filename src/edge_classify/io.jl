@@ -71,11 +71,12 @@ end
 
 # classified.tsv schema 2: adds the `in_cell` column (topological membership).
 const _SCHEMA_VERSION_CLASSIFIED = 2
-const _SCHEMA_VERSION_POLYGON_LOOPS = 1
+const _SCHEMA_VERSION_POLYGON_LOOPS = 2   # 2: dropped the reflect_radius_nm header line
 const _SCHEMA_VERSION_LOOP_DIAGNOSTICS = 2
-# params.json schema 2: per-config param set (method-specific keys; only the
-# fields that ran), produced by `to_dict`.
-const _SCHEMA_VERSION_PARAMS = 2
+# params.json schema 3: per-config param set (method-specific keys; only the
+# fields that ran), produced by `to_dict`. Schema 3 dropped REFLECT_RADIUS_NM and
+# n_reflected (the FOV-reflection pipeline was removed).
+const _SCHEMA_VERSION_PARAMS = 3
 const _SCHEMA_VERSION_MANIFEST = 1
 
 # ---------- artifact writers --------------------------------------------------
@@ -108,7 +109,6 @@ function _write_polygon_loops_tsv(path::AbstractString, info::EdgeClassifyInfo)
     open(path, "w") do io
         println(io, "# schema_version: ", _SCHEMA_VERSION_POLYGON_LOOPS)
         println(io, "# alpha_nm: ", round(Int, info.config.alpha_nm))
-        println(io, "# reflect_radius_nm: ", round(Int, info.config.reflect_radius_nm))
         println(io, "# loop_count: ", length(info.loops))
         println(io, "loop_id\tvertex_id\tx_um\ty_um")
         for (lid, verts) in enumerate(info.loops)
@@ -171,7 +171,6 @@ function _write_params_json(path::AbstractString, info::EdgeClassifyInfo;
         "timestamp_utc"    => Dates.format(Dates.now(Dates.UTC), Dates.dateformat"yyyy-mm-ddTHH:MM:SSZ"),
         "input"            => input_block,
         "n_emitters"       => info.n_emitters,
-        "n_reflected"      => info.n_reflected,
         "fov_um"           => collect(Float64, info.fov_um),
         "truncated_sides"  => Dict{String,Any}(
             "L" => info.truncated_sides.L, "R" => info.truncated_sides.R,

@@ -50,9 +50,10 @@ operation and — by design — store their answers in different places:
   the ids are only meaningful within a run. This is *instance grouping*: "which
   cluster does this point belong to?"
 - **`classify_emitters` assigns a semantic class.** It leaves `emitter.id` untouched
-  and stores one of a *fixed* vocabulary (`:outside` / `:membrane` / `:interior`) in
-  `smld.metadata["edge_classify_class"]` (authoritative copy in `info.class`). This is
-  *semantic labeling*: "what kind of region is this point in?" — stable and
+  and stores the per-emitter class — a *fixed* vocabulary (`:outside` / `:membrane` /
+  `:interior`) — in `info.class` (read via `in_cell` / `interior_mask`), threading only
+  the boundary geometry (`edge_cells` / `edge_outer_polygon`) into `smld.metadata`. This
+  is *semantic labeling*: "what kind of region is this point in?" — stable and
   self-describing across runs.
 - **`cluster_statistics` assigns nothing.** It is read-only and returns summary
   scalars/vectors, leaving the SMLD unchanged.

@@ -8,10 +8,10 @@ Edge / membrane / interior classification for 2D SMLM emitter point clouds.
 dispatch, and the result is an [`EdgeClassifyInfo`](@ref).
 
 Strategies:
-- [`OuterPolygonConfig`](@ref) — multi-K density gate → alpha-shape outer loop →
-  point-in-polygon + membrane band.
+- [`OuterPolygonConfig`](@ref) — multi-K density gate → multi-cell alpha-shape mask →
+  point-in-region + membrane band.
 - [`KdeValleyConfig`](@ref) — adaptive dSTORM density-valley gate (Gaussian-KDE +
-  background/cell valley + footprint fill + enclosure reclass).
+  background/cell valley + footprint fill) → multi-cell alpha-shape mask.
 """
 module EdgeClassify
 

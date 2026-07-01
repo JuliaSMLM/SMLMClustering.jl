@@ -44,11 +44,12 @@ as input (no allocation, no mutation) alongside a
 `ClusterStatisticsInfo` summary. The two-tuple shape is preserved for ecosystem
 symmetry, but callers should treat the first element as the unmodified input.
 
-`classify_emitters()` is likewise pass-through: the per-emitter class is mirrored
-into `smld.metadata["edge_classify_class"]`, and `info::EdgeClassifyInfo` carries
-`class::Vector{Symbol}` (`:outside` / `:membrane` / `:interior`) plus the boundary
-geometry. The concrete config type selects the strategy by dispatch. See the
-[edge-classification docs](docs/src/edge_classify.md).
+`classify_emitters()` returns a **new** SMLD with the published cell mask threaded into
+`smld.metadata["edge_cells"]` / `["edge_outer_polygon"]` (geometry only — safe under
+emitter-subsetting); the per-emitter class lives in `info::EdgeClassifyInfo`
+(`class::Vector{Symbol}` — `:outside` / `:membrane` / `:interior`), read via
+`in_cell` / `interior_mask`. The concrete config type selects the strategy by dispatch.
+See the [edge-classification docs](docs/src/methods/edge_classify.md).
 
 ## Backends
 

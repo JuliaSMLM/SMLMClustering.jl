@@ -46,13 +46,37 @@ AbstractEdgeClassifyConfig
 OuterPolygonConfig
 KdeValleyConfig
 EdgeClassifyInfo
+in_cell
+interior_mask
+interior_fraction
+```
+
+## Multi-cell mask
+
+```@docs
+CellPolygon
+MultiCellMask
+build_mask
+in_region
+region_area
+```
+
+## Edge-mask report & figures
+
+`compute_edge_report` / `write_edge_report` / `class_codes` are core (no plotting deps).
+`plot_edge_report` and `render_classes` are provided by `SMLMClusteringFiguresExt` and
+require both `CairoMakie` and `SMLMRender` to be loaded.
+
+```@docs
+EdgeReport
+compute_edge_report
+write_edge_report
+class_codes
 ```
 
 ## Advanced & diagnostics
 
 ```@docs
-in_cell
-interior_fraction
 method_name
 write_edge_artifacts
 compute_concavity_metric

@@ -6,7 +6,8 @@
 
 Boundary-proximal concavity-error metric for the outer-polygon classifier.
 Identifies emitters classified `:interior` that live in deep concave bays the
-alpha-shape bridged across.
+alpha-shape bridged across. Measured against the **dominant cell** (`cells[1].outer`);
+on a multi-cell FOV it characterizes that cell only.
 
 A `:interior` emitter is a **suspect** iff: (1) it lies within `buffer_um` of the
 outer polygon boundary; (2) it is not inside an "intracellular void" loop
@@ -61,14 +62,19 @@ function compute_concavity_metric(
     suspects = Int[]
     suspect_is_fov_edge = Bool[]
 
-    # The classification boundary (reflected loop), NOT info.outer_polygon — the
-    # latter is now the FOV-clipped published footprint, while dist_to_outer_um is
-    # measured against this loop, so the two must stay paired here.
-    outer = info.loops[1]
+    # Boundary = the DOMINANT cell's outer ring (`cells[1].outer`). `dist_to_outer_um`
+    # is the nearest distance across the whole multi-cell mask, so for a multi-cell FOV
+    # this metric is only meaningful for emitters near the dominant cell — it is
+    # documented as a dominant-cell metric (see the docstring).
+    outer = info.cells[1].outer
     no_outer = length(outer)
 
     @inbounds for i in 1:n
         info.class[i] == :interior || continue
+        # Dominant-cell metric: skip interior emitters of any OTHER cell — they'd be
+        # measured against cells[1].outer (the wrong boundary) and `dist_to_outer_um`
+        # (nearest across the whole mask) would not be their cell's distance.
+        _point_in_polygon(x_um[i], y_um[i], outer) || continue
         d_outer = info.dist_to_outer_um[i]
         isnan(d_outer) && continue
         d_outer <= buffer_um || continue

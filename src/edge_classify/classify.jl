@@ -7,11 +7,14 @@ config type selects the **tissue gate** by dispatch (`OuterPolygonConfig`,
 `KdeValleyConfig`); the rest of the pipeline is shared.
 
 The SMLD method follows the package `(out, Info)` convention: it returns the smld
-(with the primary class mirrored into `smld.metadata["edge_classify_class"]`, the
-published multi-cell mask into `smld.metadata["edge_cells"]`, and the dominant
-cell's outer ring into `smld.metadata["edge_outer_polygon"]`) and an
-[`EdgeClassifyInfo`](@ref). The coordinate method is the computational core and
-returns the `info` directly; `fov_um = (xmin, xmax, ymin, ymax)` in µm.
+with the published multi-cell mask threaded into `smld.metadata["edge_cells"]` (and
+the dominant cell's outer ring into `smld.metadata["edge_outer_polygon"]` for
+back-compat / Hopkins `region=:metadata`), plus an [`EdgeClassifyInfo`](@ref). The
+per-emitter class lives **only** in `info.class` (with the `in_cell` / `interior_mask`
+accessors) — it is deliberately *not* mirrored into the metadata, because a
+per-emitter side-list desyncs the moment a downstream step subsets emitters. The
+coordinate method is the computational core and returns the `info` directly;
+`fov_um = (xmin, xmax, ymin, ymax)` in µm.
 """
 function classify_emitters(smld::SMLMData.BasicSMLD, cfg::AbstractEdgeClassifyConfig)
     n = length(smld.emitters)
@@ -23,9 +26,13 @@ function classify_emitters(smld::SMLMData.BasicSMLD, cfg::AbstractEdgeClassifyCo
            Float64(smld.camera.pixel_edges_y[1]), Float64(smld.camera.pixel_edges_y[end]))
     info = classify_emitters(x, y, cfg; fov_um = fov)
     meta = copy(smld.metadata)
-    meta["edge_classify_class"] = String.(info.class)
+    # Only GEOMETRY is mirrored (safe under emitter-subsetting). The per-emitter class
+    # is NOT — it lives in info.class (a per-emitter side-list in metadata would desync
+    # the moment a downstream step filters/subsets emitters). Delete any stale class key
+    # (from a prior classify pass on this SMLD) so it can't linger and silently desync.
+    delete!(meta, "edge_classify_class")
     meta["edge_cells"] = info.cells                  # multi-cell mask (primary downstream output)
-    meta["edge_outer_polygon"] = info.outer_polygon  # dominant cell outer (back-compat)
+    meta["edge_outer_polygon"] = info.outer_polygon  # dominant cell outer (back-compat / Hopkins)
     smld_out = SMLMData.BasicSMLD(smld.emitters, smld.camera, smld.n_frames,
                                   smld.n_datasets, meta)
     return smld_out, info
@@ -131,10 +138,10 @@ function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64
     @inbounds for i in 1:n
         Xorig[1, i] = x[i]; Xorig[2, i] = y[i]
     end
-    loop_diags = _compute_loop_diagnostics(loops, x, y, Xorig, fov, _diag_density_thresh(cfg))
+    loop_diags = _compute_loop_diagnostics(loops, x, y, Xorig, fov, _diag_density_thresh(cfg), cells)
 
     return (; class, inside_outer, dist, outer_polygon = cells[1].outer,
-            loops, cells, sides, n_reflected = 0, loop_diags)
+            loops, cells, sides, loop_diags)
 end
 
 # ---- per-emitter labeling against the multi-cell mask ------------------------
@@ -203,7 +210,7 @@ function _build_info(raw, cfg::AbstractEdgeClassifyConfig, fov::NTuple{4,Float64
     return EdgeClassifyInfo(
         n, class, raw.inside_outer, raw.dist,
         raw.outer_polygon, raw.cells, raw.loops, raw.loop_diags,
-        cfg, fov, raw.sides, raw.n_reflected, (time_ns() - t0) / 1e9,
+        cfg, fov, raw.sides, (time_ns() - t0) / 1e9,
         n_out, n_mem, n_int,
     )
 end

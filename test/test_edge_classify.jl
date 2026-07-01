@@ -48,7 +48,6 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
         @test OuterPolygonConfig().k_list == (16, 128)        # frozen tuple → immutable provenance
         @test KdeValleyConfig().alpha_nm == 600.0             # validated, baked into the type
         @test KdeValleyConfig().sigma_nm == 150.0
-        @test KdeValleyConfig().enclosure_min_hits == 6
         @test method_name(OuterPolygonConfig()) == "outer_polygon"
         @test method_name(KdeValleyConfig()) == "kde_valley"
     end
@@ -56,8 +55,6 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
     @testset "validation + error paths" begin
         @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
             KdeValleyConfig(sigma_nm = 0.0); fov_um = (0.0,1.0,0.0,1.0))
-        @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
-            KdeValleyConfig(enclosure_min_hits = 9); fov_um = (0.0,1.0,0.0,1.0))
         @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0,1.0],
             OuterPolygonConfig(alpha_nm = -1.0); fov_um = (0.0,1.0,0.0,1.0))
         @test_throws ArgumentError classify_emitters([0.0,1.0], [0.0],
@@ -156,8 +153,15 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
         smld_out, info = classify_emitters(smld, KdeValleyConfig(sigma_nm = 200.0))
         @test smld_out isa BasicSMLD
         @test info isa EdgeClassifyInfo
-        @test haskey(smld_out.metadata, "edge_classify_class")
-        @test smld_out.metadata["edge_classify_class"] == String.(info.class)
+        # Only GEOMETRY is mirrored to metadata (subset-safe); the per-emitter class is
+        # NOT (it would desync under emitter-subsetting) — it lives in info.class.
+        @test haskey(smld_out.metadata, "edge_cells")
+        @test smld_out.metadata["edge_cells"] === info.cells
+        @test haskey(smld_out.metadata, "edge_outer_polygon")
+        @test !haskey(smld_out.metadata, "edge_classify_class")
+        # per-emitter class is the info channel; interior_mask is its strict subset
+        @test all(c -> c in (:interior, :membrane, :outside), info.class)
+        @test interior_mask(info) == (info.class .== :interior)
         @test info.n_emitters == length(smld.emitters)
     end
 

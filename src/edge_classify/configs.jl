@@ -5,11 +5,11 @@ Config types for `classify_emitters`.
 / `AbstractStatisticsConfig` (all `<: SMLMData.AbstractSMLMConfig`); each concrete
 config is dispatched as a method of `classify_emitters`:
 
-- `OuterPolygonConfig` — reflect → multi-K density gate → alpha-shape outer loop →
-  point-in-polygon + membrane band.
-- `KdeValleyConfig` — adaptive dSTORM density-valley gate (Gaussian-KDE + valley + footprint
-  + enclosure); gates on the original cloud, runs the outer-polygon geometry on the
-  footprint subset, then folds enclosure.
+- `OuterPolygonConfig` — multi-K density gate → multi-cell alpha-shape mask →
+  point-in-region + membrane band.
+- `KdeValleyConfig` — adaptive dSTORM density-valley gate (Gaussian-KDE + valley +
+  footprint); gates on the original cloud, then builds the multi-cell mask on the
+  footprint subset.
 
 Struct fields are lowercase (idiomatic Julia); the UPPERCASE `params.json` keys are
 produced only at the serialization boundary by `to_dict`.
@@ -17,16 +17,15 @@ produced only at the serialization boundary by `to_dict`.
 abstract type AbstractEdgeClassifyConfig <: SMLMData.AbstractSMLMConfig end
 
 """
-    OuterPolygonConfig(; alpha_nm=300, membrane_nm=100, reflect_radius_nm=1500,
+    OuterPolygonConfig(; alpha_nm=300, membrane_nm=100,
                        fov_trunc_tol_nm=150, k_list=(16,128), rho_k_thresh=200)
 
-Point-in-polygon vs the alpha-shape outer boundary on the FOV-augmented,
-multi-K-density-gated set, plus a `membrane_nm` band.
+Point-in-region vs the multi-cell alpha-shape mask on the multi-K-density-gated set,
+plus a `membrane_nm` band.
 """
 Base.@kwdef struct OuterPolygonConfig <: AbstractEdgeClassifyConfig
     alpha_nm::Float64          = 300.0
     membrane_nm::Float64       = 100.0
-    reflect_radius_nm::Float64 = 1500.0
     fov_trunc_tol_nm::Float64  = 150.0
     k_list::Tuple{Vararg{Int}} = (16, 128)   # immutable → provenance-safe
     rho_k_thresh::Float64      = 200.0
@@ -41,7 +40,7 @@ Base.@kwdef struct OuterPolygonConfig <: AbstractEdgeClassifyConfig
 end
 
 """
-    KdeValleyConfig(; alpha_nm=600, membrane_nm=100, reflect_radius_nm=1500,
+    KdeValleyConfig(; alpha_nm=600, membrane_nm=100,
                     fov_trunc_tol_nm=150, sigma_nm=150, ...)
 
 Adaptive density-valley gate for dSTORM data. Gates on the per-FOV KDE density valley
@@ -52,7 +51,6 @@ Adaptive density-valley gate for dSTORM data. Gates on the per-FOV KDE density v
 Base.@kwdef struct KdeValleyConfig <: AbstractEdgeClassifyConfig
     alpha_nm::Float64          = 600.0
     membrane_nm::Float64       = 100.0
-    reflect_radius_nm::Float64 = 1500.0
     fov_trunc_tol_nm::Float64  = 150.0
     sigma_nm::Float64          = 150.0
     rmax_sigma::Float64        = 3.0
@@ -61,8 +59,6 @@ Base.@kwdef struct KdeValleyConfig <: AbstractEdgeClassifyConfig
     valley_smooth::Int         = 4
     footprint_bin_um::Float64  = 0.2
     footprint_closing_px::Int  = 3
-    enclosure_bin_um::Float64  = 0.2
-    enclosure_min_hits::Int    = 6
     # multi-cell mask pipeline (shared with OuterPolygonConfig)
     core_frac::Float64         = 0.10        # relative-density gate (0 disables)
     core_radius_nm::Float64    = 600.0       # gate neighborhood radius
@@ -78,7 +74,6 @@ end
 function _validate_geom(c::AbstractEdgeClassifyConfig)
     c.alpha_nm > 0           || throw(ArgumentError("alpha_nm must be > 0; got $(c.alpha_nm)"))
     c.membrane_nm >= 0       || throw(ArgumentError("membrane_nm must be >= 0; got $(c.membrane_nm)"))
-    c.reflect_radius_nm >= 0 || throw(ArgumentError("reflect_radius_nm must be >= 0; got $(c.reflect_radius_nm)"))
     c.fov_trunc_tol_nm >= 0  || throw(ArgumentError("fov_trunc_tol_nm must be >= 0; got $(c.fov_trunc_tol_nm)"))
     (0 <= c.core_frac <= 1)  || throw(ArgumentError("core_frac must be in [0,1]; got $(c.core_frac)"))
     c.core_radius_nm > 0     || throw(ArgumentError("core_radius_nm must be > 0; got $(c.core_radius_nm)"))
@@ -111,8 +106,6 @@ function validate(c::KdeValleyConfig)
     c.valley_smooth >= 0 || throw(ArgumentError("valley_smooth must be >= 0; got $(c.valley_smooth)"))
     c.footprint_bin_um > 0 || throw(ArgumentError("footprint_bin_um must be > 0; got $(c.footprint_bin_um)"))
     c.footprint_closing_px >= 0 || throw(ArgumentError("footprint_closing_px must be >= 0; got $(c.footprint_closing_px)"))
-    c.enclosure_bin_um > 0 || throw(ArgumentError("enclosure_bin_um must be > 0; got $(c.enclosure_bin_um)"))
-    (1 <= c.enclosure_min_hits <= 8) || throw(ArgumentError("enclosure_min_hits must be in 1:8; got $(c.enclosure_min_hits)"))
     return nothing
 end
 
@@ -139,7 +132,6 @@ function _geom_dict(c::AbstractEdgeClassifyConfig)
         "METHOD"            => method_name(c),
         "ALPHA_NM"          => c.alpha_nm,
         "MEMBRANE_NM"       => c.membrane_nm,
-        "REFLECT_RADIUS_NM" => c.reflect_radius_nm,
         "FOV_TRUNC_TOL_NM"  => c.fov_trunc_tol_nm,
         "CORE_FRAC"         => c.core_frac,
         "CORE_RADIUS_NM"    => c.core_radius_nm,
@@ -167,7 +159,5 @@ function to_dict(c::KdeValleyConfig)
     d["KDE_VALLEY_SMOOTH"] = c.valley_smooth
     d["FOOTPRINT_BIN_UM"] = c.footprint_bin_um
     d["FOOTPRINT_CLOSING_PX"] = c.footprint_closing_px
-    d["ENCLOSURE_BIN_UM"] = c.enclosure_bin_um
-    d["ENCLOSURE_MIN_HITS"] = c.enclosure_min_hits
     return d
 end
