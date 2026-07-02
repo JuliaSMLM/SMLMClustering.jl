@@ -18,6 +18,7 @@ Assign a cluster id to every emitter (`0` = noise, `1..K` = clusters).
 | Method | Family | 2D/3D | Scales to large *n*? |
 |--------|--------|-------|----------------------|
 | [DBSCAN](@ref) | density / `ε`-neighborhood | 2D + 3D | yes (KD-tree) |
+| [Precision DBSCAN](@ref) | density, σ-weighted neighborhood | 2D + 3D | yes (KD-tree) |
 | [HDBSCAN](@ref) | hierarchical density | 2D + 3D | moderate |
 | [Hierarchical](@ref) | agglomerative linkage | 2D + 3D | no (O(*n*²) per group) |
 | [Voronoi (SR-Tesseler)](@ref "Voronoi (SR-Tesseler)") | tessellation density | 2D only | yes |

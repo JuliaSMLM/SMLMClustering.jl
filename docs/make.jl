@@ -19,6 +19,7 @@ makedocs(;
         "Methods" => [
             "Overview" => "methods/index.md",
             "DBSCAN" => "methods/dbscan.md",
+            "Precision DBSCAN" => "methods/precision_dbscan.md",
             "HDBSCAN" => "methods/hdbscan.md",
             "Hierarchical" => "methods/hierarchical.md",
             "Voronoi (SR-Tesseler)" => "methods/voronoi.md",
