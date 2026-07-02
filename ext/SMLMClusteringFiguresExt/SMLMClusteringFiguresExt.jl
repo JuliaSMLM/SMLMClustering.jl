@@ -71,7 +71,11 @@ end
 function _overlay(report, path)
     info = report.info
     fig = Figure(size = (900, 900))
-    ax = Axis(fig[1, 1]; title = "edge mask — $(method_name(info.config))", aspect = DataAspect())
+    # yreversed: match SMLMRender's image convention (y-down — small y at top row; see
+    # SMLMRender physical_to_pixel). CairoMakie's Axis defaults to y-up, which would flip
+    # the mask overlay top-to-bottom relative to edge_render and every other SMLM view.
+    ax = Axis(fig[1, 1]; title = "edge mask — $(method_name(info.config))",
+              aspect = DataAspect(), yreversed = true)
     hidedecorations!(ax); hidespines!(ax)
     for (cl, col) in _CLASS_STYLE
         idx = findall(==(cl), info.class)
