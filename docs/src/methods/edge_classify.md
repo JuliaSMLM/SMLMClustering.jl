@@ -245,8 +245,8 @@ plot_edge_report(report; output_dir = dir)       # extension: the figure series
   writes the figure series and returns the saved paths: `<prefix>_render.png` (an
   SMLMRender Gaussian super-resolution render at `zoom_render` — ≈ 5 nm/px for a ~100 nm
   camera — colored by class, the class image), `<prefix>_overlay.png` (a CairoMakie
-  polygon overlay over class-colored localizations) and `<prefix>_fractions.png` (a
-  class-fraction bar).
+  polygon overlay over class-colored localizations, with a color-coded class legend) and
+  `<prefix>_fractions.png` (a class-fraction bar).
 - `render_classes(smld, class; ...)` is the underlying per-class renderer;
   `class_codes(info)` maps the class to the integer code the render uses (`outside = 0` →
   SMLMRender's reserved gray, `membrane = 1`, `interior = 2`).

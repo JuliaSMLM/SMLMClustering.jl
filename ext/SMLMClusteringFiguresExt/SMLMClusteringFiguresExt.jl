@@ -117,7 +117,8 @@ end
 Write the standard edge-mask figure series into `output_dir`, returning the saved
 paths: `<prefix>_render.png` (SMLMRender Gaussian SR at `zoom_render`, colored by
 class — interior / membrane / outside — the class image), `<prefix>_overlay.png`
-(CairoMakie polygon overlay over class-colored localizations) and
+(CairoMakie polygon overlay over class-colored localizations, with a color-coded
+class legend keyed to the overlay's own class colors) and
 `<prefix>_fractions.png` (class-fraction bar). `zoom_render` sets the render
 resolution (e.g. 20 ≈ 5 nm/px for a ~100 nm camera); `zoom_overlay` is reserved for
 a future render-backed overlay variant. (`render_classes` still supports CircleRender
