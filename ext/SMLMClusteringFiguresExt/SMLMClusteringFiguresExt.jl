@@ -77,10 +77,16 @@ function _overlay(report, path)
     ax = Axis(fig[1, 1]; title = "edge mask — $(method_name(info.config))",
               aspect = DataAspect(), yreversed = true)
     hidedecorations!(ax); hidespines!(ax)
+    legend_elems = MarkerElement[]; legend_labels = Any[]
     for (cl, col) in _CLASS_STYLE
         idx = findall(==(cl), info.class)
-        isempty(idx) || scatter!(ax, report.x_um[idx], report.y_um[idx];
-                                 color = col, markersize = 2.0, label = String(cl))
+        isempty(idx) && continue
+        scatter!(ax, report.x_um[idx], report.y_um[idx]; color = col, markersize = 2.0)
+        # Legend: solid swatch + label text tinted the class colour, so the words
+        # themselves read as the key (col[1] = opaque hue; col[2] = plot alpha, dropped
+        # here so the swatch/word stay legible). Only classes present get an entry.
+        push!(legend_elems, MarkerElement(; color = col[1], marker = :circle, markersize = 12))
+        push!(legend_labels, rich(String(cl); color = col[1]))
     end
     for cell in info.cells
         _ring!(ax, cell.outer; color = :black, linewidth = 2.0)
@@ -88,7 +94,8 @@ function _overlay(report, path)
             _ring!(ax, h; color = (:black, 0.7), linewidth = 1.2, linestyle = :dash)
         end
     end
-    axislegend(ax; position = :rt, framevisible = false)
+    isempty(legend_elems) ||
+        axislegend(ax, legend_elems, legend_labels; position = :rt, framevisible = false)
     save(path, fig)
 end
 
