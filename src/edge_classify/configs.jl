@@ -37,6 +37,7 @@ Base.@kwdef struct OuterPolygonConfig <: AbstractEdgeClassifyConfig
     alpha_scale::Float64       = 2.0         # ×local k-NN (carver) and ×cell-median (envelope)
     keep_internal::Bool        = false       # keep internal holes (else solid cells)
     min_cell_frac::Float64     = 1/3         # drop cells < frac × largest (0 keeps all)
+    min_hole_frac::Float64     = 0.0         # drop holes < frac × cell outer area (0 keeps all)
 end
 
 """
@@ -67,6 +68,7 @@ Base.@kwdef struct KdeValleyConfig <: AbstractEdgeClassifyConfig
     alpha_scale::Float64       = 2.0         # ×local k-NN (carver) and ×cell-median (envelope)
     keep_internal::Bool        = false       # keep internal holes (else solid cells)
     min_cell_frac::Float64     = 1/3         # drop cells < frac × largest (0 keeps all)
+    min_hole_frac::Float64     = 0.0         # drop holes < frac × cell outer area (0 keeps all)
 end
 
 # ---- validation (per type; called once at dispatch entry) --------------------
@@ -80,6 +82,7 @@ function _validate_geom(c::AbstractEdgeClassifyConfig)
     c.alpha_knn >= 1         || throw(ArgumentError("alpha_knn must be >= 1; got $(c.alpha_knn)"))
     c.alpha_scale > 0        || throw(ArgumentError("alpha_scale must be > 0; got $(c.alpha_scale)"))
     (0 <= c.min_cell_frac < 1) || throw(ArgumentError("min_cell_frac must be in [0,1); got $(c.min_cell_frac)"))
+    (0 <= c.min_hole_frac < 1) || throw(ArgumentError("min_hole_frac must be in [0,1); got $(c.min_hole_frac)"))
     return nothing
 end
 
@@ -140,6 +143,7 @@ function _geom_dict(c::AbstractEdgeClassifyConfig)
         "ALPHA_SCALE"       => c.alpha_scale,
         "KEEP_INTERNAL"     => c.keep_internal,
         "MIN_CELL_FRAC"     => c.min_cell_frac,
+        "MIN_HOLE_FRAC"     => c.min_hole_frac,
     )
 end
 

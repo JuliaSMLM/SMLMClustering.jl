@@ -127,7 +127,7 @@ function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64
         "(alpha_adaptive=$(cfg.alpha_adaptive)); check inputs or relax the alpha parameters"))
 
     cells = build_mask(loops; keep_internal = cfg.keep_internal,
-                       min_cell_frac = cfg.min_cell_frac)
+                       min_cell_frac = cfg.min_cell_frac, min_hole_frac = cfg.min_hole_frac)
     isempty(cells) && throw(ErrorException(
         "$(method_name(cfg)): no cell survived the min_cell_frac=$(cfg.min_cell_frac) cutoff"))
 

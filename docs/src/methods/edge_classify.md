@@ -72,7 +72,11 @@ splits self-touching loops into simple rings, groups outer rings with any enclos
 by nesting parity, drops debris smaller than `min_cell_frac ×` the largest cell's area,
 and orders the cells **largest-first** (so `cells[1]` is the dominant cell). Each
 `CellPolygon` has an `outer` ring plus optional internal `holes`; `keep_internal`
-(default `false`) fills internal voids into solid cells, `true` carves them out.
+(default `false`) fills internal voids into solid cells, `true` carves them out. When
+`keep_internal = true`, `min_hole_frac` (default `0`) drops any hole smaller than
+`min_hole_frac ×` its cell's outer area — a scale gate that keeps genuine internal voids
+while filling sub-cell texture (e.g. inter-cluster gaps on dense cells, which the adaptive
+α-shape would otherwise carve into hundreds of spurious holes) back into the interior.
 `in_region(x, y, mask)` tests membership and `region_area(mask)` sums the enclosed area.
 The same `MultiCellMask` is accepted directly as a Hopkins observation window.
 
@@ -81,7 +85,8 @@ The same `MultiCellMask` is accepted directly as a Hopkins observation window.
 Each config is a `<: AbstractEdgeClassifyConfig` (sibling of `AbstractClusterConfig`)
 holding only its own parameters; fields are lowercase, validated at dispatch entry. Both
 share the mask-pipeline parameters (`core_frac`, `core_radius_nm`, `alpha_adaptive`,
-`alpha_knn`, `alpha_scale`, `keep_internal`, `min_cell_frac`) and differ only in the gate.
+`alpha_knn`, `alpha_scale`, `keep_internal`, `min_cell_frac`, `min_hole_frac`) and differ
+only in the gate.
 
 ### `OuterPolygonConfig`
 
@@ -102,6 +107,7 @@ Fixed multi-K k-NN density gate → multi-scale alpha-shape mask → point-in-re
 | `alpha_scale` | 2.0 | — | ×local k-NN (carver) and ×cell-median (envelope) |
 | `keep_internal` | `false` | — | keep internal holes (else solid cells) |
 | `min_cell_frac` | 1/3 | — | drop cells < frac × largest (`0` keeps all) |
+| `min_hole_frac` | 0 | — | with `keep_internal`, drop holes < frac × cell outer area (`0` keeps all) |
 
 ### `KdeValleyConfig`
 

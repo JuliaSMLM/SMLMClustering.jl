@@ -29,6 +29,23 @@ using SMLMClustering
         @test isapprox(region_area(md), 100.0; atol = 1e-6)
     end
 
+    @testset "min_hole_frac scale separation" begin
+        outer = sq(0, 0, 10)                        # area 100
+        bighole = sq(1, 1, 4)                       # area 16 → frac 0.16 (real void)
+        smallhole = sq(7, 7, 1)                     # area 1  → frac 0.01 (texture)
+        loops = [outer, bighole, smallhole]
+        @test length(build_mask(loops; keep_internal = true, min_hole_frac = 0.0)[1].holes) == 2
+        m = build_mask(loops; keep_internal = true, min_hole_frac = 0.05)
+        @test length(m[1].holes) == 1               # small dropped, big kept
+        @test in_region(7.5, 7.5, m)                # small hole filled → interior
+        @test !in_region(2.5, 2.5, m)               # big hole still a void
+        @test isapprox(region_area(m), 100.0 - 16.0; atol = 1e-6)
+        @test length(build_mask(loops; keep_internal = true, min_hole_frac = 0.2)[1].holes) == 0
+        @test isempty(build_mask(loops; keep_internal = false, min_hole_frac = 0.05)[1].holes)
+        @test_throws ArgumentError build_mask(loops; min_hole_frac = 1.0)
+        @test_throws ArgumentError build_mask(loops; min_hole_frac = -0.1)
+    end
+
     @testset "multiple cells + debris cutoff" begin
         big = sq(0, 0, 10); other = sq(20, 0, 10); tiny = sq(40, 40, 1)
         @test length(build_mask([big, other])) == 2                  # equal area → both kept
