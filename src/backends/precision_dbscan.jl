@@ -162,9 +162,11 @@ primitive.
   partition is **order-free / bit-exact** — independent of thread scheduling and
   edge order. Every point is labeled `1..K` (a singleton is its own component; no
   noise).
-- `min_points ≥ 1`: core-point DBSCAN. A point is *core* iff its active degree is
-  `≥ min_points`; core points sharing an active edge merge; a non-core *border* point
-  joins the **lowest-id** adjacent core cluster (deterministic tie-break); a
+- `min_points ≥ 1`: core-point DBSCAN with the classical (self-inclusive) `minPts`,
+  identical to [`DBSCANConfig`](@ref). A point is *core* iff its neighborhood — itself
+  plus its active neighbors — has `≥ min_points` members (i.e. active degree
+  `≥ min_points − 1`); core points sharing an active edge merge; a non-core *border*
+  point joins the **lowest-id** adjacent core cluster (deterministic tie-break); a
   non-core point with no active core neighbor is noise (`0`).
 
 Cluster ids are canonical: `1..K` in ascending order of first appearance by point
@@ -230,14 +232,16 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
         return _canonicalize_all!(labels, parent, n)
     end
 
-    # Core points: active degree ≥ min_points (counted directly, no degree array).
+    # Core points: classical DBSCAN minPts — a point is core iff its neighborhood
+    # (itself + active neighbors) has ≥ min_points members, i.e. active degree ≥
+    # min_points - 1. Matches DBSCANConfig / Clustering.dbscan (self-inclusive count).
     core = falses(n)
     @inbounds for i in 1:n
         σi = Float64(σ_eff[i]); c = 0
         for t in off[i]:(off[i + 1] - 1)
             ds[t] < ns * (σi + Float64(σ_eff[nb[t]])) && (c += 1)
         end
-        core[i] = c >= min_points
+        core[i] = c >= min_points - 1
     end
     # Merge core points connected by an active edge.
     @inbounds for i in 1:n
@@ -298,9 +302,10 @@ fixed `eps_nm`, the neighborhood adapts to each localization's uncertainty.
 
 # Fields
 - `nsigma::Float64`: neighbor radius in units of the summed precision `σ_effᵢ + σ_effⱼ`.
-- `min_points::Int = 5`: core-point threshold (active neighbors for a point to be
-  a core point) and minimum cluster size — clusters smaller than `min_points` are
-  relabeled as noise. Defaults to `5` to match [`DBSCANConfig`](@ref).
+- `min_points::Int = 5`: classical DBSCAN `minPts` — the minimum neighborhood size
+  (the point itself plus its active neighbors) for a core point — and the minimum
+  cluster size (clusters smaller than `min_points` become noise). Identical in meaning
+  and default to [`DBSCANConfig`](@ref).
 - `use_3d::Bool = false`: cluster in (x, y, z) using `σ_z`; requires `Emitter3DFit`.
 - `per_dataset::Bool = true`: cluster within each `dataset` index independently.
 - `remove_unclustered::Bool = false`: drop noise emitters (`id == 0`) from the output.

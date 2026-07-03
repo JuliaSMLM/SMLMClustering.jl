@@ -41,10 +41,11 @@ For a group of localizations the backend:
 2. **Re-thresholds** the cached pairs with `d < nsigma·(σ_eff_i + σ_eff_j)` to get
    the active edge set.
 3. **Labels** the active graph:
-   - the **core-point** rule (`min_points ≥ 1`, the config path): a point is a *core
-     point* when its active degree is `≥ min_points`; core points sharing an active
-     edge merge; a non-core *border* point joins the lowest-id adjacent core cluster;
-     a point with no active core neighbor is **noise**;
+   - the **core-point** rule (`min_points ≥ 1`, the config path): the classical
+     (self-inclusive) `minPts`, identical to [DBSCAN](@ref) — a point is a *core point*
+     when its neighborhood (itself plus its active neighbors) has `≥ min_points` members;
+     core points sharing an active edge merge; a non-core *border* point joins the
+     lowest-id adjacent core cluster; a point with no active core neighbor is **noise**;
    - clusters below `min_points` in final size are dropped to noise and the survivors
      are compact-relabeled `1..K`, matching [DBSCAN](@ref).
 

@@ -3,6 +3,7 @@ using SMLMClustering
 using SMLMClustering: build_precision_neighbor_graph, precision_dbscan_labels,
                       precision_dbscan_labels!, PrecisionNeighborGraph
 using SMLMData
+using Clustering        # to cross-check min_points against classical DBSCAN minPts
 using Test
 using Random
 
@@ -58,7 +59,8 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
         @test precision_dbscan_labels(g, σ, 0.6; min_points = 0) == [1, 1, 1]
         # nsigma=0.4 → threshold 0.8 → no active edge → three singletons
         @test precision_dbscan_labels(g, σ, 0.4; min_points = 0) == [1, 2, 3]
-        # core-point: only the middle point has degree 2; ends join as borders
+        # core-point, self-inclusive minPts: min_points=2 → core iff active degree ≥ 1,
+        # so all three points are core → one cluster
         @test precision_dbscan_labels(g, σ, 0.6; min_points = 2) == [1, 1, 1]
 
         # add an isolated 4th point → noise under the core-point branch
@@ -130,16 +132,33 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
 
         # Border adjacent to two distinct core clusters joins the LOWER-id one.
         # A = idx 1-5 (blob at x≈0 + antenna idx5), B = idx 6-10 (blob at x≈1 + antenna
-        # idx10). P = idx11 midway with large σ (0.40) so it reaches one antenna in each
-        # cluster (active degree 2 < min_points=3 → border) while A and B stay disjoint. A
-        # is labeled 1 (first core by index), B is 2 → P joins 1.
+        # idx10). P = idx11 midway with large σ (0.40) reaches one antenna in each cluster,
+        # active degree 2. With self-inclusive min_points=4 (core iff active degree ≥ 3),
+        # P (degree 2) is a *border*, not a core bridge, so A and B stay disjoint. A is
+        # labeled 1 (first core by index), B is 2 → P joins 1.
         xs = [0.0, 0.02, 0.0, 0.02, 0.07, 1.0, 1.02, 1.0, 1.02, 0.93, 0.5]
         ys = [0.0, 0.0, 0.02, 0.02, 0.01, 0.0, 0.0, 0.02, 0.02, 0.01, 0.01]
         coords = permutedims(hcat(xs, ys))            # 2×11, columns = points
         σ = [fill(0.05, 10); 0.40]
         gp = build_precision_neighbor_graph(coords, 0.80)
-        @test precision_dbscan_labels(gp, σ, 1.0; min_points = 3) ==
+        @test precision_dbscan_labels(gp, σ, 1.0; min_points = 4) ==
               [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1]
+    end
+
+    @testset "min_points == classical DBSCAN minPts (self-inclusive)" begin
+        # 5 collinear points (radius 1.5 → interior active degree 2, endpoints 1) + 1
+        # isolated point. The self-inclusive fix makes precision's min_points identical
+        # to Clustering.dbscan's min_neighbors across the core/border/noise regimes:
+        # min_points=3 clusters the whole chain (it was ALL-NOISE under the old
+        # self-exclusive count) and marks the isolated point noise.
+        X = [0.0 1.0 2.0 3.0 4.0 20.0; 0.0 0.0 0.0 0.0 0.0 0.0]
+        g = build_precision_neighbor_graph(X, 30.0)
+        σ = fill(1.0, 6)                      # threshold = nsigma·2; nsigma=0.75 → 1.5
+        for m in (2, 3, 4)
+            ref = Clustering.dbscan(X, 1.5; min_neighbors = m, min_cluster_size = 1).assignments
+            @test precision_dbscan_labels(g, σ, 0.75; min_points = m) == ref
+        end
+        @test precision_dbscan_labels(g, σ, 0.75; min_points = 3) == [1, 1, 1, 1, 1, 0]
     end
 
     # ---- SMLD-facing config ------------------------------------------------
