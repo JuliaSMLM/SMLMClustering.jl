@@ -32,8 +32,6 @@ using Random
 
 export AbstractClusterConfig, ClusterInfo, cluster,
        DBSCANConfig, PrecisionDBSCANConfig,
-       PrecisionNeighborGraph, build_precision_neighbor_graph,
-       precision_dbscan_labels, precision_dbscan_labels!,
        HDBSCANConfig, HierarchicalConfig, VoronoiConfig,
        MRFDensityClusterConfig, calibrate_regime_gaussians,
        calibrate_regime_thresholds,

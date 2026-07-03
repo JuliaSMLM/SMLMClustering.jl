@@ -33,7 +33,9 @@ calibrate_regime_thresholds
 The lower-level, reuse-the-graph primitive behind [`PrecisionDBSCANConfig`](@ref):
 build the σ-aware neighbor cache once, then relabel it many times with varying
 `σ_eff` / `nsigma` without rebuilding the tree (see the
-[Precision DBSCAN](@ref) method page for the walk-through).
+[Precision DBSCAN](@ref) method page for the walk-through). These names are **public
+but not exported** — call them qualified (`SMLMClustering.build_precision_neighbor_graph`,
+etc.).
 
 ```@docs
 PrecisionNeighborGraph

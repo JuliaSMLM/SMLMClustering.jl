@@ -17,9 +17,9 @@
 # Unlike the Euclidean `DBSCANConfig` (which wraps `Clustering.dbscan`), the metric
 # here is precision-weighted, so this is a self-contained implementation. The
 # neighbor prepass is threaded (mirrors `local_contrast.jl`); the label pass is
-# deterministic: union-find connected components for `min_pts == 0` (order-free,
+# deterministic: union-find connected components for `min_points == 0` (order-free,
 # bit-exact regardless of thread scheduling) and a deterministic core-point
-# variant for `min_pts ≥ 1`.
+# variant for `min_points ≥ 1`.
 
 import Base.Threads: @threads
 
@@ -30,18 +30,11 @@ Geometry-only neighbor cache for precision-weighted DBSCAN, built once by
 [`build_precision_neighbor_graph`](@ref) and reused across many
 [`precision_dbscan_labels`](@ref) calls with varying `σ_eff` / `nsigma`.
 
-Stores, in CSR (compressed sparse row) form, every candidate pair whose raw
-Euclidean distance is `≤ max_radius`:
-
-- `n::Int` — number of points.
-- `offsets::Vector{Int}` — point `i`'s neighbors occupy
-  `neighbors[offsets[i] : offsets[i+1]-1]` (length `n+1`, `offsets[1] == 1`).
-- `neighbors::Vector{Int}` — neighbor index `j` (full adjacency, both directions,
-  so a point's active *degree* is exact for the core-point branch).
-- `dists::Vector{Float64}` — raw Euclidean distance `d(i,j)`, parallel to `neighbors`.
-- `max_radius::Float64` — the query radius the cache is valid up to (same length
-  unit as the coordinates).
-- `dims::Int` — coordinate dimensionality (2 or 3).
+Treat it as an **opaque handle**: build it with `build_precision_neighbor_graph`
+and pass it back to `precision_dbscan_labels`. Its fields (`n`, `offsets`,
+`neighbors`, `dists`, `max_radius`, `dims`) are an **implementation detail** — a CSR
+store of every candidate pair with raw Euclidean `d ≤ max_radius` (full adjacency,
+both directions) — and **may change between releases**; you should not need to read them.
 
 The cache is a valid superset for a label pass iff
 `nsigma·(σ_eff_i + σ_eff_j) ≤ max_radius` for every pair; the sufficient rule is
@@ -156,8 +149,8 @@ end
 
 """
     precision_dbscan_labels(g::PrecisionNeighborGraph, σ_eff, nsigma;
-                            min_pts = 1, check_superset = true) -> Vector{Int}
-    precision_dbscan_labels!(labels, g, σ_eff, nsigma; min_pts = 1, check_superset = true)
+                            min_points = 1, check_superset = true) -> Vector{Int}
+    precision_dbscan_labels!(labels, g, σ_eff, nsigma; min_points = 1, check_superset = true)
 
 Label the points of a prebuilt [`PrecisionNeighborGraph`](@ref) by re-thresholding
 the cached pairs: an edge `(i, j)` is **active** iff
@@ -165,12 +158,12 @@ the cached pairs: an edge `(i, j)` is **active** iff
 change on every call **without rebuilding `g`** — that reuse is the point of the
 primitive.
 
-- `min_pts == 0`: connected components of the active graph, via union-find. The
+- `min_points == 0`: connected components of the active graph, via union-find. The
   partition is **order-free / bit-exact** — independent of thread scheduling and
   edge order. Every point is labeled `1..K` (a singleton is its own component; no
   noise).
-- `min_pts ≥ 1`: core-point DBSCAN. A point is *core* iff its active degree is
-  `≥ min_pts`; core points sharing an active edge merge; a non-core *border* point
+- `min_points ≥ 1`: core-point DBSCAN. A point is *core* iff its active degree is
+  `≥ min_points`; core points sharing an active edge merge; a non-core *border* point
   joins the **lowest-id** adjacent core cluster (deterministic tie-break); a
   non-core point with no active core neighbor is noise (`0`).
 
@@ -183,14 +176,14 @@ and errors if the cache is too tight to contain every active pair (see
 `labels::Vector{Int}` of length `g.n`.
 """
 function precision_dbscan_labels(g::PrecisionNeighborGraph, σ_eff::AbstractVector{<:Real},
-                                 nsigma::Real; min_pts::Int = 1, check_superset::Bool = true)
+                                 nsigma::Real; min_points::Int = 1, check_superset::Bool = true)
     labels = Vector{Int}(undef, g.n)
     return precision_dbscan_labels!(labels, g, σ_eff, nsigma;
-                                    min_pts = min_pts, check_superset = check_superset)
+                                    min_points = min_points, check_superset = check_superset)
 end
 
 """
-    precision_dbscan_labels!(labels, g, σ_eff, nsigma; min_pts=1, check_superset=true) -> labels
+    precision_dbscan_labels!(labels, g, σ_eff, nsigma; min_points=1, check_superset=true) -> labels
 
 In-place form of [`precision_dbscan_labels`](@ref): fills the caller-supplied
 `labels::Vector{Int}` (which must have length `g.n`) and returns it. Use this in a
@@ -199,14 +192,14 @@ reallocating the label vector each time.
 """
 function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph,
                                   σ_eff::AbstractVector{<:Real}, nsigma::Real;
-                                  min_pts::Int = 1, check_superset::Bool = true)
+                                  min_points::Int = 1, check_superset::Bool = true)
     n = g.n
     length(labels) == n ||
         throw(ArgumentError("labels length $(length(labels)) ≠ graph n $n"))
     length(σ_eff) == n ||
         throw(ArgumentError("σ_eff length $(length(σ_eff)) ≠ graph n $n"))
     nsigma > 0 || throw(ArgumentError("nsigma must be > 0; got $nsigma"))
-    min_pts >= 0 || throw(ArgumentError("min_pts must be ≥ 0; got $min_pts"))
+    min_points >= 0 || throw(ArgumentError("min_points must be ≥ 0; got $min_points"))
     n == 0 && return labels
     if check_superset
         # The cache holds every pair with raw d ≤ max_radius; a pair is active iff
@@ -224,7 +217,7 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
     parent = collect(1:n)
     sz = ones(Int, n)
 
-    if min_pts <= 0
+    if min_points <= 0
         # Connected components over active edges (each undirected edge once, j > i).
         @inbounds for i in 1:n
             σi = Float64(σ_eff[i])
@@ -237,14 +230,14 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
         return _canonicalize_all!(labels, parent, n)
     end
 
-    # Core points: active degree ≥ min_pts (counted directly, no degree array).
+    # Core points: active degree ≥ min_points (counted directly, no degree array).
     core = falses(n)
     @inbounds for i in 1:n
         σi = Float64(σ_eff[i]); c = 0
         for t in off[i]:(off[i + 1] - 1)
             ds[t] < ns * (σi + Float64(σ_eff[nb[t]])) && (c += 1)
         end
-        core[i] = c >= min_pts
+        core[i] = c >= min_points
     end
     # Merge core points connected by an active edge.
     @inbounds for i in 1:n
@@ -280,7 +273,7 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
     return labels
 end
 
-# Relabel union-find roots to 1..K by ascending first-appearance (min_pts==0).
+# Relabel union-find roots to 1..K by ascending first-appearance (min_points==0).
 function _canonicalize_all!(labels::Vector{Int}, parent::Vector{Int}, n::Int)
     rootlabel = zeros(Int, n); nextlab = 0
     @inbounds for i in 1:n
@@ -294,7 +287,7 @@ end
 # ---- SMLD-facing config + cluster() -----------------------------------------
 
 """
-    PrecisionDBSCANConfig(; nsigma, min_points=3, use_3d=false, per_dataset=true,
+    PrecisionDBSCANConfig(; nsigma, min_points=5, use_3d=false, per_dataset=true,
                           remove_unclustered=false)
 
 Configuration for **precision-weighted DBSCAN** of SMLM localizations: the
@@ -305,9 +298,9 @@ fixed `eps_nm`, the neighborhood adapts to each localization's uncertainty.
 
 # Fields
 - `nsigma::Float64`: neighbor radius in units of the summed precision `σ_effᵢ + σ_effⱼ`.
-- `min_points::Int = 3`: core-point threshold (active neighbors for a point to be
+- `min_points::Int = 5`: core-point threshold (active neighbors for a point to be
   a core point) and minimum cluster size — clusters smaller than `min_points` are
-  relabeled as noise, matching [`DBSCANConfig`](@ref).
+  relabeled as noise. Defaults to `5` to match [`DBSCANConfig`](@ref).
 - `use_3d::Bool = false`: cluster in (x, y, z) using `σ_z`; requires `Emitter3DFit`.
 - `per_dataset::Bool = true`: cluster within each `dataset` index independently.
 - `remove_unclustered::Bool = false`: drop noise emitters (`id == 0`) from the output.
@@ -323,7 +316,7 @@ See also: [`DBSCANConfig`](@ref), [`AbstractClusterConfig`](@ref), [`cluster`](@
 """
 Base.@kwdef struct PrecisionDBSCANConfig <: AbstractClusterConfig
     nsigma::Float64
-    min_points::Int = 3
+    min_points::Int = 5
     use_3d::Bool = false
     per_dataset::Bool = true
     remove_unclustered::Bool = false
@@ -375,7 +368,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::PrecisionDBSCANConfig)
                                 "cannot form a precision-weighted neighborhood."))
         g = build_precision_neighbor_graph(coords, max_radius)
         labels = precision_dbscan_labels(g, σ_eff, cfg.nsigma;
-                                         min_pts = cfg.min_points, check_superset = true)
+                                         min_points = cfg.min_points, check_superset = true)
 
         # Drop clusters below min_points (mirror DBSCANConfig), compact-relabel,
         # and write ids onto emitter.id. Sizes recounted from the labels.

@@ -1,4 +1,7 @@
 using SMLMClustering
+# The reuse primitive is public but not exported — bring the names into scope explicitly.
+using SMLMClustering: build_precision_neighbor_graph, precision_dbscan_labels,
+                      precision_dbscan_labels!, PrecisionNeighborGraph
 using SMLMData
 using Test
 using Random
@@ -52,26 +55,26 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
         σ = [1.0, 1.0, 1.0]
 
         # nsigma=0.6 → active iff d < 0.6*(1+1)=1.2 → the two unit edges → one CC
-        @test precision_dbscan_labels(g, σ, 0.6; min_pts = 0) == [1, 1, 1]
+        @test precision_dbscan_labels(g, σ, 0.6; min_points = 0) == [1, 1, 1]
         # nsigma=0.4 → threshold 0.8 → no active edge → three singletons
-        @test precision_dbscan_labels(g, σ, 0.4; min_pts = 0) == [1, 2, 3]
+        @test precision_dbscan_labels(g, σ, 0.4; min_points = 0) == [1, 2, 3]
         # core-point: only the middle point has degree 2; ends join as borders
-        @test precision_dbscan_labels(g, σ, 0.6; min_pts = 2) == [1, 1, 1]
+        @test precision_dbscan_labels(g, σ, 0.6; min_points = 2) == [1, 1, 1]
 
         # add an isolated 4th point → noise under the core-point branch
         coords4 = [0.0 1.0 2.0 10.0; 0.0 0.0 0.0 0.0]
         g4 = build_precision_neighbor_graph(coords4, 2.5)
-        @test precision_dbscan_labels(g4, fill(1.0, 4), 0.6; min_pts = 2) == [1, 1, 1, 0]
-        # min_pts=0 labels every point (singleton gets its own id)
-        @test precision_dbscan_labels(g4, fill(1.0, 4), 0.6; min_pts = 0) == [1, 1, 1, 2]
+        @test precision_dbscan_labels(g4, fill(1.0, 4), 0.6; min_points = 2) == [1, 1, 1, 0]
+        # min_points=0 labels every point (singleton gets its own id)
+        @test precision_dbscan_labels(g4, fill(1.0, 4), 0.6; min_points = 0) == [1, 1, 1, 2]
 
         # in-place form matches the allocating form
         buf = Vector{Int}(undef, 3)
-        @test precision_dbscan_labels!(buf, g, σ, 0.6; min_pts = 0) === buf
+        @test precision_dbscan_labels!(buf, g, σ, 0.6; min_points = 0) === buf
         @test buf == [1, 1, 1]
 
         # superset guard: nsigma*2*max(σ) must not exceed max_radius
-        @test_throws ArgumentError precision_dbscan_labels(g, σ, 2.0; min_pts = 0)  # need 4.0 > 2.5
+        @test_throws ArgumentError precision_dbscan_labels(g, σ, 2.0; min_points = 0)  # need 4.0 > 2.5
         @test_throws ArgumentError precision_dbscan_labels(g, [1.0, 1.0], 0.6)      # σ length ≠ n
         @test_throws ArgumentError precision_dbscan_labels(g, σ, 0.0)               # nsigma ≤ 0
     end
@@ -87,8 +90,8 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
         for ns in (2.0, 3.0, 4.0), mp in (0, 3)
             tight = build_precision_neighbor_graph(coords, ns * 2 * maximum(σ))
             coarse = build_precision_neighbor_graph(coords, 5.0 * 2 * maximum(σ))  # superset
-            lt = precision_dbscan_labels(tight, σ, ns; min_pts = mp)
-            lc = precision_dbscan_labels(coarse, σ, ns; min_pts = mp, check_superset = false)
+            lt = precision_dbscan_labels(tight, σ, ns; min_points = mp)
+            lc = precision_dbscan_labels(coarse, σ, ns; min_points = mp, check_superset = false)
             @test lt == lc                       # identical partition AND canonical ids
         end
     end
@@ -97,9 +100,9 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
         # d == threshold is NOT active (strict `<`): two points 1.0 apart, σ=0.5 each,
         # nsigma=1.0 → threshold exactly 1.0 → not linked.
         gb = build_precision_neighbor_graph([0.0 1.0; 0.0 0.0], 1.0)
-        @test precision_dbscan_labels(gb, [0.5, 0.5], 1.0; min_pts = 0) == [1, 2]
+        @test precision_dbscan_labels(gb, [0.5, 0.5], 1.0; min_points = 0) == [1, 2]
         gb2 = build_precision_neighbor_graph([0.0 1.0; 0.0 0.0], 1.5)
-        @test precision_dbscan_labels(gb2, [0.5, 0.5], 1.01; min_pts = 0) == [1, 1]  # d=1.0 < 1.01
+        @test precision_dbscan_labels(gb2, [0.5, 0.5], 1.01; min_points = 0) == [1, 1]  # d=1.0 < 1.01
 
         # reuse invariant holds with per-point heterogeneous σ_eff (the realistic case)
         rng = Xoshiro(99)
@@ -110,8 +113,8 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
         for ns in (2.0, 3.5), mp in (0, 3)
             tight = build_precision_neighbor_graph(coords, ns * 2 * maximum(σ))
             coarse = build_precision_neighbor_graph(coords, 4.0 * 2 * maximum(σ))
-            @test precision_dbscan_labels(tight, σ, ns; min_pts = mp) ==
-                  precision_dbscan_labels(coarse, σ, ns; min_pts = mp, check_superset = false)
+            @test precision_dbscan_labels(tight, σ, ns; min_points = mp) ==
+                  precision_dbscan_labels(coarse, σ, ns; min_points = mp, check_superset = false)
         end
 
         # all-zero precision → config cannot form a neighborhood → ArgumentError
@@ -120,22 +123,22 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
     end
 
     @testset "core-point branch: multi-cluster ids + border tie-break" begin
-        # two separated pairs → two components; min_pts=1 → all core; canonical ids by index
+        # two separated pairs → two components; min_points=1 → all core; canonical ids by index
         gc = build_precision_neighbor_graph([0.0 0.01 1.0 1.01; 0.0 0.0 0.0 0.0], 0.2)
-        @test precision_dbscan_labels(gc, fill(0.1, 4), 1.0; min_pts = 1) == [1, 1, 2, 2]
-        @test precision_dbscan_labels(gc, fill(0.1, 4), 1.0; min_pts = 0) == [1, 1, 2, 2]
+        @test precision_dbscan_labels(gc, fill(0.1, 4), 1.0; min_points = 1) == [1, 1, 2, 2]
+        @test precision_dbscan_labels(gc, fill(0.1, 4), 1.0; min_points = 0) == [1, 1, 2, 2]
 
         # Border adjacent to two distinct core clusters joins the LOWER-id one.
         # A = idx 1-5 (blob at x≈0 + antenna idx5), B = idx 6-10 (blob at x≈1 + antenna
         # idx10). P = idx11 midway with large σ (0.40) so it reaches one antenna in each
-        # cluster (active degree 2 < min_pts=3 → border) while A and B stay disjoint. A
+        # cluster (active degree 2 < min_points=3 → border) while A and B stay disjoint. A
         # is labeled 1 (first core by index), B is 2 → P joins 1.
         xs = [0.0, 0.02, 0.0, 0.02, 0.07, 1.0, 1.02, 1.0, 1.02, 0.93, 0.5]
         ys = [0.0, 0.0, 0.02, 0.02, 0.01, 0.0, 0.0, 0.02, 0.02, 0.01, 0.01]
         coords = permutedims(hcat(xs, ys))            # 2×11, columns = points
         σ = [fill(0.05, 10); 0.40]
         gp = build_precision_neighbor_graph(coords, 0.80)
-        @test precision_dbscan_labels(gp, σ, 1.0; min_pts = 3) ==
+        @test precision_dbscan_labels(gp, σ, 1.0; min_points = 3) ==
               [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1]
     end
 
@@ -144,7 +147,7 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
         cfg = PrecisionDBSCANConfig(nsigma = 5.0)
         @test cfg isa AbstractClusterConfig
         @test cfg.nsigma == 5.0
-        @test cfg.min_points == 3
+        @test cfg.min_points == 5
         @test cfg.use_3d === false
         @test cfg.per_dataset === true
         @test cfg.remove_unclustered === false
