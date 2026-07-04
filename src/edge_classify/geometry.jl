@@ -31,7 +31,7 @@ end
 # `k_list` is any iterable of integers (Tuple or Vector). An empty `k_list`
 # disables the gate (returns all-true, no k-NN) — used by the kde_valley path.
 # Each K is clamped to n_total-1 so small clouds don't throw on knn(K+1).
-function _tissue_mask(X::Matrix{Float64}, k_list, rho_thresh::Float64)
+function _cell_mask(X::Matrix{Float64}, k_list, rho_thresh::Float64)
     n_total = size(X, 2)
     (isempty(k_list) || n_total <= 1) && return trues(n_total)
     tree = NearestNeighbors.KDTree(X)
@@ -214,7 +214,7 @@ function _local_alpha_shape_loops(X::Matrix{Float64}, kdist::Vector{Float64},
     return polys
 end
 
-# Relative-density gate: of tissue indices `idx`, keep those whose neighbor count
+# Relative-density gate: of cell indices `idx`, keep those whose neighbor count
 # within `r_um` is at least `frac × median(count)`. Removes isolated outlier
 # whiskers without erasing genuine low-density cells (the cutoff is relative to the
 # cell's own median, so it self-scales with density). `frac <= 0` disables it.

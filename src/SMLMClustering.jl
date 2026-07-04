@@ -31,7 +31,8 @@ using NearestNeighbors
 using Random
 
 export AbstractClusterConfig, ClusterInfo, cluster,
-       DBSCANConfig, HDBSCANConfig, HierarchicalConfig, VoronoiConfig,
+       DBSCANConfig, PrecisionDBSCANConfig,
+       HDBSCANConfig, HierarchicalConfig, VoronoiConfig,
        MRFDensityClusterConfig, calibrate_regime_gaussians,
        calibrate_regime_thresholds,
        PointHysteresisConfig,
@@ -43,6 +44,7 @@ include("types.jl")
 include("utils.jl")
 include("region.jl")
 include("backends/dbscan.jl")
+include("backends/precision_dbscan.jl")
 include("backends/hdbscan.jl")
 include("backends/hierarchical.jl")
 include("backends/voronoi.jl")

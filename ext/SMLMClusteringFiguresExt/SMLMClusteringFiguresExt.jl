@@ -71,12 +71,22 @@ end
 function _overlay(report, path)
     info = report.info
     fig = Figure(size = (900, 900))
-    ax = Axis(fig[1, 1]; title = "edge mask — $(method_name(info.config))", aspect = DataAspect())
+    # yreversed: match SMLMRender's image convention (y-down — small y at top row; see
+    # SMLMRender physical_to_pixel). CairoMakie's Axis defaults to y-up, which would flip
+    # the mask overlay top-to-bottom relative to edge_render and every other SMLM view.
+    ax = Axis(fig[1, 1]; title = "edge mask — $(method_name(info.config))",
+              aspect = DataAspect(), yreversed = true)
     hidedecorations!(ax); hidespines!(ax)
+    legend_elems = MarkerElement[]; legend_labels = Any[]
     for (cl, col) in _CLASS_STYLE
         idx = findall(==(cl), info.class)
-        isempty(idx) || scatter!(ax, report.x_um[idx], report.y_um[idx];
-                                 color = col, markersize = 2.0, label = String(cl))
+        isempty(idx) && continue
+        scatter!(ax, report.x_um[idx], report.y_um[idx]; color = col, markersize = 2.0)
+        # Legend: solid swatch + label text tinted the class colour, so the words
+        # themselves read as the key (col[1] = opaque hue; col[2] = plot alpha, dropped
+        # here so the swatch/word stay legible). Only classes present get an entry.
+        push!(legend_elems, MarkerElement(; color = col[1], marker = :circle, markersize = 12))
+        push!(legend_labels, rich(String(cl); color = col[1]))
     end
     for cell in info.cells
         _ring!(ax, cell.outer; color = :black, linewidth = 2.0)
@@ -84,7 +94,8 @@ function _overlay(report, path)
             _ring!(ax, h; color = (:black, 0.7), linewidth = 1.2, linestyle = :dash)
         end
     end
-    axislegend(ax; position = :rt, framevisible = false)
+    isempty(legend_elems) ||
+        axislegend(ax, legend_elems, legend_labels; position = :rt, framevisible = false)
     save(path, fig)
 end
 
@@ -106,7 +117,8 @@ end
 Write the standard edge-mask figure series into `output_dir`, returning the saved
 paths: `<prefix>_render.png` (SMLMRender Gaussian SR at `zoom_render`, colored by
 class — interior / membrane / outside — the class image), `<prefix>_overlay.png`
-(CairoMakie polygon overlay over class-colored localizations) and
+(CairoMakie polygon overlay over class-colored localizations, with a color-coded
+class legend keyed to the overlay's own class colors) and
 `<prefix>_fractions.png` (class-fraction bar). `zoom_render` sets the render
 resolution (e.g. 20 ≈ 5 nm/px for a ~100 nm camera); `zoom_overlay` is reserved for
 a future render-backed overlay variant. (`render_classes` still supports CircleRender

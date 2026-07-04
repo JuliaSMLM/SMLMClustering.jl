@@ -18,6 +18,7 @@ cluster
 AbstractClusterConfig
 ClusterInfo
 DBSCANConfig
+PrecisionDBSCANConfig
 HDBSCANConfig
 HierarchicalConfig
 VoronoiConfig
@@ -25,6 +26,22 @@ MRFDensityClusterConfig
 PointHysteresisConfig
 calibrate_regime_gaussians
 calibrate_regime_thresholds
+```
+
+## Precision-DBSCAN primitive
+
+The lower-level, reuse-the-graph primitive behind [`PrecisionDBSCANConfig`](@ref):
+build the σ-aware neighbor cache once, then relabel it many times with varying
+`σ_eff` / `nsigma` without rebuilding the tree (see the
+[Precision DBSCAN](@ref) method page for the walk-through). These names are **public
+but not exported** — call them qualified (`SMLMClustering.build_precision_neighbor_graph`,
+etc.).
+
+```@docs
+PrecisionNeighborGraph
+build_precision_neighbor_graph
+precision_dbscan_labels
+precision_dbscan_labels!
 ```
 
 ## Spatial statistics

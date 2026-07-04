@@ -82,7 +82,7 @@ function _ring_in_ring(a::AbstractVector{NTuple{2,Float64}},
 end
 
 """
-    build_mask(loops; keep_internal = false, min_cell_frac = 1/3) -> MultiCellMask
+    build_mask(loops; keep_internal = false, min_cell_frac = 1/3, min_hole_frac = 0) -> MultiCellMask
 
 Assemble a [`MultiCellMask`](@ref) from raw alpha-shape boundary `loops` (closed
 vertex rings):
@@ -92,16 +92,21 @@ vertex rings):
    outer, odd depth ⇒ an internal region (a real void *or* a pinch-enclosed
    region).
 3. **Group** each cell outer with the internal regions directly inside it — only
-   when `keep_internal = true`; otherwise cells are solid (`holes` empty).
+   when `keep_internal = true`; otherwise cells are solid (`holes` empty). With
+   `min_hole_frac > 0`, holes smaller than `min_hole_frac × (that cell's outer area)`
+   are dropped (filled back into the interior), so only real voids above that scale
+   survive — sub-cell texture such as inter-cluster gaps no longer fragments the cell.
 4. **Drop debris**: remove any cell whose outer area is below
    `min_cell_frac × (largest cell area)`; `min_cell_frac = 0` keeps everything.
 
 Cells are returned largest-first.
 """
 function build_mask(loops::AbstractVector; keep_internal::Bool = false,
-                    min_cell_frac::Real = 1//3)
+                    min_cell_frac::Real = 1//3, min_hole_frac::Real = 0)
     (0 <= min_cell_frac < 1) ||
         throw(ArgumentError("min_cell_frac must be in [0,1); got $min_cell_frac"))
+    (0 <= min_hole_frac < 1) ||
+        throw(ArgumentError("min_hole_frac must be in [0,1); got $min_hole_frac"))
     simple = Vector{Vector{NTuple{2,Float64}}}()
     for L in loops
         for s in _split_simple(L)
@@ -129,9 +134,14 @@ function build_mask(loops::AbstractVector; keep_internal::Bool = false,
         iseven(depth[i]) || continue
         hs = Vector{Vector{NTuple{2,Float64}}}()
         if keep_internal
+            # Drop holes below min_hole_frac × this cell's outer area: separates
+            # real internal voids (kept) from sub-cell texture like inter-cluster
+            # gaps carved by the adaptive α-shape (filled → absorbed into interior).
+            hole_thr = min_hole_frac > 0 ? min_hole_frac * _ring_area(simple[i]) : 0.0
             for j in 1:n
                 depth[j] == depth[i] + 1 || continue
-                _ring_in_ring(simple[j], simple[i]) && push!(hs, simple[j])
+                _ring_in_ring(simple[j], simple[i]) || continue
+                _ring_area(simple[j]) >= hole_thr && push!(hs, simple[j])
             end
         end
         push!(cells, CellPolygon(simple[i], hs))

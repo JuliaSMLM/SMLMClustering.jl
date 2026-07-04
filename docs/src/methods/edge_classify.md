@@ -3,7 +3,7 @@
 Classify each 2D SMLM emitter as `:outside`, `:membrane`, or `:interior` — the
 off-cell background, the cell-boundary band, and the cell interior. The verb
 `classify_emitters` is a peer of the package's `cluster` / `cluster_statistics`:
-the **concrete config type selects the tissue-gate strategy by dispatch**, and the
+the **concrete config type selects the cell-gate strategy by dispatch**, and the
 result is an `EdgeClassifyInfo`. A field of view may hold **more than one cell** — the
 published boundary is a [multi-cell mask](#Multi-cell-mask).
 
@@ -32,12 +32,12 @@ info           = classify_emitters(x_um, y_um, cfg::AbstractEdgeClassifyConfig; 
 
 ## Concept
 
-The pipeline is shared across configs; only the first step (the **tissue gate**) is
+The pipeline is shared across configs; only the first step (the **cell gate**) is
 config-specific:
 
-1. **Tissue gate** — decide which localizations are cell tissue (per-config, below).
+1. **Cell gate** — decide which localizations are cell vs. empty coverslip (per-config, below).
 2. **Relative-density gate** — drop isolated outlier whiskers whose local count is below
-   `core_frac ×` the tissue median (relative, so it self-scales with density; `0`
+   `core_frac ×` the cell median (relative, so it self-scales with density; `0`
    disables it).
 3. **Multi-scale adaptive alpha-shape** — build boundary loops with a per-triangle α (below).
 4. **Multi-cell mask** — group the loops into cells with `build_mask`.
@@ -72,7 +72,11 @@ splits self-touching loops into simple rings, groups outer rings with any enclos
 by nesting parity, drops debris smaller than `min_cell_frac ×` the largest cell's area,
 and orders the cells **largest-first** (so `cells[1]` is the dominant cell). Each
 `CellPolygon` has an `outer` ring plus optional internal `holes`; `keep_internal`
-(default `false`) fills internal voids into solid cells, `true` carves them out.
+(default `false`) fills internal voids into solid cells, `true` carves them out. When
+`keep_internal = true`, `min_hole_frac` (default `0`) drops any hole smaller than
+`min_hole_frac ×` its cell's outer area — a scale gate that keeps genuine internal voids
+while filling sub-cell texture (e.g. inter-cluster gaps on dense cells, which the adaptive
+α-shape would otherwise carve into hundreds of spurious holes) back into the interior.
 `in_region(x, y, mask)` tests membership and `region_area(mask)` sums the enclosed area.
 The same `MultiCellMask` is accepted directly as a Hopkins observation window.
 
@@ -81,7 +85,8 @@ The same `MultiCellMask` is accepted directly as a Hopkins observation window.
 Each config is a `<: AbstractEdgeClassifyConfig` (sibling of `AbstractClusterConfig`)
 holding only its own parameters; fields are lowercase, validated at dispatch entry. Both
 share the mask-pipeline parameters (`core_frac`, `core_radius_nm`, `alpha_adaptive`,
-`alpha_knn`, `alpha_scale`, `keep_internal`, `min_cell_frac`) and differ only in the gate.
+`alpha_knn`, `alpha_scale`, `keep_internal`, `min_cell_frac`, `min_hole_frac`) and differ
+only in the gate.
 
 ### `OuterPolygonConfig`
 
@@ -102,15 +107,68 @@ Fixed multi-K k-NN density gate → multi-scale alpha-shape mask → point-in-re
 | `alpha_scale` | 2.0 | — | ×local k-NN (carver) and ×cell-median (envelope) |
 | `keep_internal` | `false` | — | keep internal holes (else solid cells) |
 | `min_cell_frac` | 1/3 | — | drop cells < frac × largest (`0` keeps all) |
+| `min_hole_frac` | 0 | — | with `keep_internal`, drop holes < frac × cell outer area (`0` keeps all) |
 
 ### `KdeValleyConfig`
 
-Adaptive density-valley gate for dSTORM data. Gaussian-KDE density on the **original**
-cloud → background/cell valley threshold → footprint fill → the shared multi-scale mask on
-the footprint subset. The valley threshold is found **per FOV**, so there is no per-cell
-density tuning — which is what lets it generalize across cells whose absolute density
-varies. The defaults (notably `alpha_nm = 600`, vs. the polygon default of 300) are tuned
-for dSTORM membrane data, so a bare `KdeValleyConfig()` is the intended entry point.
+The recommended default. It decides which localizations are cell (vs. empty coverslip) from
+the data's **own local density**, with no absolute threshold to tune — which is what lets a
+single `KdeValleyConfig()` work across cells whose brightness and density vary. It runs three
+steps on the original cloud, then hands the surviving points to the shared multi-scale
+alpha-shape mask.
+
+**1 — Kernel density estimate (KDE).** KDE is the standard way to turn a set of points into a
+smooth estimate of how locally crowded each one is. Picture dropping a small Gaussian "bump"
+of width `σ` (`sigma_nm`, 150 nm) on every localization, then reading off the height of all
+the bumps summed together: where localizations pile up (inside the cell) the bumps reinforce
+→ high density; out in the sparse coverslip background they barely overlap → low density.
+Concretely, each localization's density is `Σ exp(−d²/2σ²)` over neighbours within
+`rmax_sigma·σ` (3σ), normalized by `2πσ²` with the self-term removed — a local density in
+localizations per µm². The bandwidth `σ` is
+the one knob that matters: it is the length scale over which density is averaged — large
+enough to bridge the gaps between the individual blinks of single molecules so a cell reads
+as one continuous dense region, small enough not to smear the cell edge into the background.
+(KDE is used rather than the k-NN density of `OuterPolygonConfig` because a range-query
+estimate stays unbiased at edges and inside clusters — where "distance to the k-th neighbour"
+is skewed — and is memory-safe on very dense clouds.)
+
+**2 — Locate the density threshold (the cell mode's left base).** Every localization now
+carries a density value ρ (in locs/µm²). Histogram those densities on a `log10(ρ + 1)` axis —
+the `+1` keeps the ρ = 0 points on-scale and the log makes the wide range from sparse
+background to dense cell legible. When the field holds a clear cell on clean coverslip the
+histogram is **ideally bimodal**: a low hump of background/noise localizations (few neighbours
+within 3σ → low ρ) and a high hump of cell localizations (many neighbours → high ρ). That
+two-hump picture is where the *KDE-valley* name comes from — but the gate does **not** hunt
+for the minimum between the humps (that valley is often shallow or unresolved). Instead it
+anchors on the **cell mode** and finds that mode's **left base**: it smooths the histogram
+(`valley_smooth`), takes the tallest bin as the dominant mode — *assumed* to be the cell (a
+plain `argmax`, so a field that is mostly background can latch onto the wrong mode) — and
+walks left down that mode's flank to the first bin whose smoothed count has dropped below
+`valley_floorfrac` (5 %) of the peak height. Converting that bin's log-density back to linear
+gives the threshold ρ_thr (`= 10^leftbase − 1`); localizations with ρ ≥ ρ_thr are kept as
+cell. **This is the core idea:** ρ_thr is read off
+each field's own density distribution instead of being fixed in advance, so a denser cell or a
+dimmer acquisition shifts the cell mode and its left base tracks it — no per-cell tuning.
+(`OuterPolygonConfig`, by contrast, applies an *absolute* k-NN threshold you must set for your
+dataset.)
+
+**3 — Fill the footprint.** The kept points are rasterized onto a grid (`footprint_bin_um`,
+0.2 µm): a bin is marked occupied if any kept point falls in it. Single-molecule blinking
+leaves gaps and empty pockets inside this occupancy map that are not really background, so
+they are recovered geometrically. The occupied bins are first **dilated** by
+`footprint_closing_px` (3 px) — not to grow the cell, but only to seal the thin necks and
+inter-clump gaps — and then the grid *exterior* is flood-filled inward from the border across
+the un-dilated bins. Any un-dilated bin the flood-fill never reaches is an **enclosed interior
+void**; the footprint is the union of the originally occupied bins and those enclosed voids.
+(The dilation only blocks the flood-fill from leaking through gaps — it is discarded
+afterward, so the footprint is *not* grown outward; its boundary sits on the actual occupied
+bins.) Finally every localization — not just the ones above threshold — is re-tested against
+the footprint: a point is kept for the mask iff its bin is occupied or enclosed, which is what
+adds back the interior localizations the density gate had dropped. That surviving subset is
+what the multi-scale alpha-shape mask (shared with `OuterPolygonConfig`) is then built on.
+
+The defaults (notably `alpha_nm = 600`, vs. the polygon default of 300) are tuned for dSTORM
+membrane data, so a bare `KdeValleyConfig()` is the intended entry point.
 
 | field | default | unit | meaning |
 |---|---|---|---|
@@ -119,11 +177,11 @@ for dSTORM membrane data, so a bare `KdeValleyConfig()` is the intended entry po
 | `fov_trunc_tol_nm` | 150 | nm | FOV-truncation tolerance |
 | `sigma_nm` | 150 | nm | Gaussian-KDE bandwidth σ |
 | `rmax_sigma` | 3.0 | — | KDE range-query cutoff in units of σ |
-| `valley_nbins` | 140 | — | log-density histogram bins for the valley threshold |
-| `valley_floorfrac` | 0.05 | — | left-base cutoff as a fraction of the cell-mode peak |
+| `valley_nbins` | 140 | — | log-density histogram bins for the left-base threshold |
+| `valley_floorfrac` | 0.05 | — | left-base cutoff as a fraction of the dominant-mode peak |
 | `valley_smooth` | 4 | bins | ± window for histogram smoothing |
 | `footprint_bin_um` | 0.2 | µm | raster bin for the footprint fill |
-| `footprint_closing_px` | 3 | px | morphological closing radius (seal thin necks) |
+| `footprint_closing_px` | 3 | px | neck-sealing dilation radius for the flood-fill |
 
 (plus the shared mask-pipeline fields listed under `OuterPolygonConfig`.)
 
@@ -131,7 +189,7 @@ for dSTORM membrane data, so a bare `KdeValleyConfig()` is the intended entry po
 
 The two strategies split along **gate vs. geometry**. Both end in the same multi-scale
 alpha-shape multi-cell mask — they differ only in how they decide which localizations are
-cell tissue:
+cell (vs. empty coverslip):
 
 - **`OuterPolygonConfig`** gates on a **fixed multi-K kNN density threshold**: fast and
   simple, but the threshold is absolute, so it must be set for your dataset's density and
@@ -193,8 +251,8 @@ plot_edge_report(report; output_dir = dir)       # extension: the figure series
   writes the figure series and returns the saved paths: `<prefix>_render.png` (an
   SMLMRender Gaussian super-resolution render at `zoom_render` — ≈ 5 nm/px for a ~100 nm
   camera — colored by class, the class image), `<prefix>_overlay.png` (a CairoMakie
-  polygon overlay over class-colored localizations) and `<prefix>_fractions.png` (a
-  class-fraction bar).
+  polygon overlay over class-colored localizations, with a color-coded class legend) and
+  `<prefix>_fractions.png` (a class-fraction bar).
 - `render_classes(smld, class; ...)` is the underlying per-class renderer;
   `class_codes(info)` maps the class to the integer code the render uses (`outside = 0` →
   SMLMRender's reserved gray, `membrane = 1`, `interior = 2`).
