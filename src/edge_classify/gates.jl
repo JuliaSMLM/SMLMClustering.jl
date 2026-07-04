@@ -1,6 +1,6 @@
 """
-Internal: density gates. The multi-K k-NN tissue mask lives in `geometry.jl`
-(`_tissue_mask`); this file holds the KDE-valley gate used by `KdeValleyConfig`.
+Internal: density gates. The multi-K k-NN cell mask lives in `geometry.jl`
+(`_cell_mask`); this file holds the KDE-valley gate used by `KdeValleyConfig`.
 
 Validated functions ported verbatim from the genmab production wrapper
 (`paper-genmab-hexabody/src/edge_mask.jl`); only the parameter source changes
@@ -87,10 +87,10 @@ function _raster_bounds(vs::AbstractVector{Float64}, lo_fov::Float64, hi_fov::Fl
     return clamp(a, lo, hi), clamp(b, lo, hi)
 end
 
-# Footprint of kept tissue: rasterize → dilate-seal thin necks → flood-fill
+# Footprint of the kept cell points: rasterize → dilate-seal thin necks → flood-fill
 # enclosed holes from the grid border. Returns a per-point in-footprint mask.
 function _footprint_fill(xs::Vector{Float64}, ys::Vector{Float64},
-                         tissue::AbstractVector{Bool}, fov::NTuple{4,Float64};
+                         cell_mask::AbstractVector{Bool}, fov::NTuple{4,Float64};
                          bin::Float64 = 0.2, closing::Int = 3)
     x0, x1 = _raster_bounds(xs, fov[1], fov[2])
     y0, y1 = _raster_bounds(ys, fov[3], fov[4])
@@ -100,7 +100,7 @@ function _footprint_fill(xs::Vector{Float64}, ys::Vector{Float64},
     by(y) = clamp(floor(Int, (y - y0) / bin) + 1, 1, ny)
     occ = falses(nx, ny)
     @inbounds for i in eachindex(xs)
-        tissue[i] && (occ[bx(xs[i]), by(ys[i])] = true)
+        cell_mask[i] && (occ[bx(xs[i]), by(ys[i])] = true)
     end
     dil = _morph(occ, closing, true)
     seen = falses(nx, ny)
@@ -139,8 +139,8 @@ function _kde_valley_footprint(x::Vector{Float64}, y::Vector{Float64},
                                nbins = cfg.valley_nbins,
                                floorfrac = cfg.valley_floorfrac,
                                smooth = cfg.valley_smooth) - 1.0
-    tissue = rho .>= rho_thr
-    return _footprint_fill(x, y, tissue, fov;
+    cell_mask = rho .>= rho_thr
+    return _footprint_fill(x, y, cell_mask, fov;
                            bin = cfg.footprint_bin_um,
                            closing = cfg.footprint_closing_px)
 end

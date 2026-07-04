@@ -3,7 +3,7 @@
 Classify each 2D SMLM emitter as `:outside`, `:membrane`, or `:interior` — the
 off-cell background, the cell-boundary band, and the cell interior. The verb
 `classify_emitters` is a peer of the package's `cluster` / `cluster_statistics`:
-the **concrete config type selects the tissue-gate strategy by dispatch**, and the
+the **concrete config type selects the cell-gate strategy by dispatch**, and the
 result is an `EdgeClassifyInfo`. A field of view may hold **more than one cell** — the
 published boundary is a [multi-cell mask](#Multi-cell-mask).
 
@@ -32,12 +32,12 @@ info           = classify_emitters(x_um, y_um, cfg::AbstractEdgeClassifyConfig; 
 
 ## Concept
 
-The pipeline is shared across configs; only the first step (the **tissue gate**) is
+The pipeline is shared across configs; only the first step (the **cell gate**) is
 config-specific:
 
-1. **Tissue gate** — decide which localizations are cell tissue (per-config, below).
+1. **Cell gate** — decide which localizations are cell vs. empty coverslip (per-config, below).
 2. **Relative-density gate** — drop isolated outlier whiskers whose local count is below
-   `core_frac ×` the tissue median (relative, so it self-scales with density; `0`
+   `core_frac ×` the cell median (relative, so it self-scales with density; `0`
    disables it).
 3. **Multi-scale adaptive alpha-shape** — build boundary loops with a per-triangle α (below).
 4. **Multi-cell mask** — group the loops into cells with `build_mask`.
@@ -146,7 +146,7 @@ plain `argmax`, so a field that is mostly background can latch onto the wrong mo
 walks left down that mode's flank to the first bin whose smoothed count has dropped below
 `valley_floorfrac` (5 %) of the peak height. Converting that bin's log-density back to linear
 gives the threshold ρ_thr (`= 10^leftbase − 1`); localizations with ρ ≥ ρ_thr are kept as
-tissue. **This is the core idea:** ρ_thr is read off
+cell. **This is the core idea:** ρ_thr is read off
 each field's own density distribution instead of being fixed in advance, so a denser cell or a
 dimmer acquisition shifts the cell mode and its left base tracks it — no per-cell tuning.
 (`OuterPolygonConfig`, by contrast, applies an *absolute* k-NN threshold you must set for your
@@ -189,7 +189,7 @@ membrane data, so a bare `KdeValleyConfig()` is the intended entry point.
 
 The two strategies split along **gate vs. geometry**. Both end in the same multi-scale
 alpha-shape multi-cell mask — they differ only in how they decide which localizations are
-cell tissue:
+cell (vs. empty coverslip):
 
 - **`OuterPolygonConfig`** gates on a **fixed multi-K kNN density threshold**: fast and
   simple, but the threshold is absolute, so it must be set for your dataset's density and

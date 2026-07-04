@@ -3,7 +3,7 @@
     classify_emitters(x_um, y_um, cfg::AbstractEdgeClassifyConfig; fov_um) -> info
 
 Classify each emitter as `:outside`, `:membrane`, or `:interior`. The concrete
-config type selects the **tissue gate** by dispatch (`OuterPolygonConfig`,
+config type selects the **cell gate** by dispatch (`OuterPolygonConfig`,
 `KdeValleyConfig`); the rest of the pipeline is shared.
 
 The SMLD method follows the package `(out, Info)` convention: it returns the smld
@@ -56,28 +56,28 @@ end
 
 # ---- the shared multi-cell pipeline ------------------------------------------
 #
-# tissue gate (per-config) → relative-density gate → density-adaptive α →
+# cell gate (per-config) → relative-density gate → density-adaptive α →
 # un-reflected alpha-shape loops → build_mask (split-to-simple + nesting + debris
 # cutoff) → per-emitter labeling against the multi-cell mask. The published mask is
-# the alpha-shape of the *observed* tissue (no FOV reflection); FOV-truncated
+# the alpha-shape of the *observed* cell (no FOV reflection); FOV-truncated
 # boundary segments are excluded from the membrane band, so a field-of-view cut is
 # never mislabeled as membrane.
 
-# Tissue-index selection — the only per-config step.
-function _tissue_indices(x::Vector{Float64}, y::Vector{Float64},
+# Cell-index selection — the only per-config step.
+function _cell_indices(x::Vector{Float64}, y::Vector{Float64},
                          fov::NTuple{4,Float64}, cfg::KdeValleyConfig)
     fp = _kde_valley_footprint(x, y, cfg, fov)
     return findall(fp)
 end
-function _tissue_indices(x::Vector{Float64}, y::Vector{Float64},
+function _cell_indices(x::Vector{Float64}, y::Vector{Float64},
                          fov::NTuple{4,Float64}, cfg::OuterPolygonConfig)
     n = length(x)
     X = Matrix{Float64}(undef, 2, n)
     @inbounds for i in 1:n
         X[1, i] = x[i]; X[2, i] = y[i]
     end
-    tmask = _tissue_mask(X, cfg.k_list, cfg.rho_k_thresh)
-    return findall(tmask)
+    cell_mask = _cell_mask(X, cfg.k_list, cfg.rho_k_thresh)
+    return findall(cell_mask)
 end
 
 function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64},
@@ -85,14 +85,14 @@ function _classify(x::Vector{Float64}, y::Vector{Float64}, fov::NTuple{4,Float64
     n = length(x)
     n == 0 && throw(ErrorException("$(method_name(cfg)): no emitters to classify"))
 
-    idx0 = _tissue_indices(x, y, fov, cfg)
+    idx0 = _cell_indices(x, y, fov, cfg)
     isempty(idx0) && throw(ErrorException(
-        "$(method_name(cfg)): density/footprint gate produced empty tissue; " *
+        "$(method_name(cfg)): density/footprint gate produced no cell points; " *
         "cloud too sparse or parameters too strict"))
 
     idx = _relative_core_filter(x, y, idx0, cfg.core_radius_nm / 1000, cfg.core_frac)
     length(idx) >= 3 || throw(ErrorException(
-        "$(method_name(cfg)): too few tissue points after the relative-density gate " *
+        "$(method_name(cfg)): too few cell points after the relative-density gate " *
         "(core_frac=$(cfg.core_frac)); cloud too sparse"))
 
     # FOV-edge truncation from the GATED TISSUE (not raw emitters): a noise point on the

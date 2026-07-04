@@ -127,7 +127,7 @@ method_name(::KdeValleyConfig)    = "kde_valley"
 # Density threshold for the loop-diagnostic `frac_dense` column (OuterPolygonConfig
 # only; kde runs the polygon core on a footprint subset via an OuterPolygonConfig).
 _diag_density_thresh(c::OuterPolygonConfig) = c.rho_k_thresh
-_diag_density_thresh(::KdeValleyConfig) = 0.0   # KDE gate selects tissue; no rho_k
+_diag_density_thresh(::KdeValleyConfig) = 0.0   # KDE gate selects cell; no rho_k
 
 # Serialization: UPPERCASE on-disk param dict + the write-only METHOD wire value.
 function _geom_dict(c::AbstractEdgeClassifyConfig)
