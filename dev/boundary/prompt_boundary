@@ -1,0 +1,365 @@
+Write a routine, boundary_cluster, to compute the points that make up the
+boundary of a cluster, very much like the MATLAB command, boundary.  This
+routine will be called by the routine, boundary_clusters, which will take as
+its input the output, smld_out, and a cfg structure in the style of
+SMLMClustering.cluster.  Use existing routines in SNLMClustering and other
+existing Julia repositories as possible.
+
+These routines should be well commented and the boundary computation should
+ run quickly (check type stability and memory allocations).
+
+...
+
+Index j corresponds to cluster_keys[j]. When per_dataset=false, dataset field
+ in keys reflects the emitter's actual dataset value (irrelevant for indexing —
+  just use 1:n_clusters positionally).
+
+ boundary_clusters (exported)
+
+ boundary_clusters(smld_out::SMLMData.BasicSMLD,
+                   cfg::BoundaryClustersConfig) -> (smld_out,
+ ClusterBoundaryInfo)
+ Pass-through SMLD (read-only, like cluster_statistics). Groups emitters by
+ (dataset, id) pairs (skipping id=0 noise), extracts coordinates, calls
+ boundary_cluster, returns coordinate polygons.
+
+ Internal helpers (not exported, underscore prefix)
+
+ - _circumradius_2d(ax,ay, bx,by, cx,cy) -> Float64 — @inline, returns Inf for
+ degenerate triangles
+ - _trace_boundary_loops(adj::Dict{Int,Vector{Int}}) -> Vector{Vector{Int}} —
+ traces all closed loops
+ - _trace_single_loop!(adj, start, unvisited) -> Vector{Int} — traces one loop,
+  removes visited from set
+
+ Type stability & performance
+
+ - All internal buffers use concrete types (Vector{Float64}, Vector{Int},
+ Dict{Tuple{Int,Int}, Int})
+ - @inbounds on tight loops (circumradius computation, edge counting)
+ - @inline on _circumradius_2d
+ - sizehint!(edge_count, 3*m) to avoid Dict rehashing
+ - Dominant cost is DT triangulation O(n log n) — already the project standard
+
+ Files to create / modify
+
+ - Create: src/backends/boundary.jl
+ - Modify: src/SMLMClustering.jl
+   - Add include("backends/boundary.jl")
+   - Add to exports: boundary_cluster, BoundaryClustersConfig,
+ ClusterBoundaryInfo, boundary_clusters
+
+ Verification
+
+ 1. Unit smoke test in REPL: synthesize a 2D Gaussian cluster, call
+ boundary_cluster(x, y; shrink=0.5), plot points and boundary polygon
+ 2. boundary_clusters test: run DBSCANConfig on a multi-cluster SMLD, call
+ boundary_clusters, check length(binfo.cluster_keys) == info.n_clusters
+ 3. shrink=0 test: verify result matches get_convex_hull_vertices directly
+ 4. Edge cases: n=1, n=2, n=3 (triangle), collinear points
+ 5. Run existing test suite (Pkg.test()) to confirm no regressions
+
+...
+
+Everything is clean. Here's a summary of what was implemented:
+
+  ---
+  What was added
+
+  src/backends/boundary.jl (new file, ~350 lines) — three exported symbols and
+  three internal helpers:
+
+  boundary_cluster(x, y; shrink=0.5) -> Vector{Int}
+
+  MATLAB boundary(x, y, shrink) analogue. Algorithm:
+  1. Builds the Delaunay triangulation via the existing DelaunayTriangulation.jl
+   dependency
+  2. Computes circumradius for every solid triangle using _circumradius_2d
+  (@inline, @inbounds)
+  3. Sets alpha_radius = quantile(circumradii, 1−shrink) — at shrink=0 all
+  triangles are included (convex hull shortcut via get_convex_hull_vertices); at
+   shrink=1 only the smallest triangle is kept
+  4. Extracts boundary edges (those belonging to exactly one included triangle)
+  using a pre-sized Dict{Tuple{Int,Int},Int}
+  5. Traces all closed loops; returns the largest in CCW order (shoelace
+  sign-check + reverse) 6. Returns a closed Vector{Int} (first == last), same convention as MATLAB BoundaryClustersConfig(; shrink=0.5, per_dataset=true)
+  Plain struct with two knobs. per_dataset should match the value used in the
+  original cluster() call.
+
+  boundary_clusters(smld_out, cfg) -> (smld_out, ClusterBoundaryInfo)
+
+  Read-only, pass-through SMLD (like cluster_statistics). Groups emitters by
+  (dataset, cluster_id) pairs, calls boundary_cluster per cluster, returns
+  per-cluster boundary polygons as (boundaries_x[j], boundaries_y[j]) coordinate
+   vectors in μm.
+
+  Performance: O(n log n) dominated by DT triangulation (~2.5 ms/cluster at
+  n=200; same cost as existing Voronoi backend). All inner loops are type-stable
+   with concrete types and @inbounds. 257 pre-existing tests continue to pass.
+
+===
+
+Read SMLMAnanlysis/CLAUDE.md
+Using the existing render routine in SMLMRender, create a subroutine inside
+of cluster_driver.jl which calls render to produce a Gaussian plot of the smld
+data overlayed by the clusters indicated in smld_out.  Add cluster boundaries
+as an optional input to the configuration for this plotting.  Add comments!
+
+● The file is done. Here's a summary of what was added to cluster_driver.jl:
+
+  ClusterPlotConfig — Base.@kwdef struct controlling everything:
+  - pixel_size_nm, colormap, scalebar — passed straight to
+  RenderConfig/GaussianRender
+  - show_centroids, centroid_size, centroid_color — × markers at each cluster
+  centroid
+  - boundaries — optional ClusterBoundaryInfo; when set, draws alpha-shape
+  outlines
+  - boundary_linewidth — line weight for those outlines
+  - filename, figure_size — output control
+
+  plot_clusters(smld, smld_out, cfg) — five steps:
+  1. Calls render(smld, RenderConfig(...)) with GaussianRender to produce the
+  density background
+  2. Re-derives the same physical μm bounds that SMLMRender used internally
+  (data extrema + 5 % margin), so the CairoMakie axis aligns exactly with the
+  image pixels
+  3. Builds a Figure/Axis with yreversed=true (SMLM y increases downward) and
+  calls image! with a transposed image (permutedims(bg_img, (2,1)) converts
+  [row,col]=[y,x] to [col,row]=[x,y] as Makie expects)
+  4. Scatters × markers at each cluster centroid
+  5. If cfg.boundaries !== nothing, draws each boundary polygon with cycled
+  colours from a qualitative palette
+
+  The driver body was updated to use distinct config variable names (cfg_dbscan,
+   cfg_bnd, cfg_hop) and calls plot_clusters with binfo saving a PNG named after
+   the data file.
+
+===
+
+Read SMLMAnanlysis/CLAUDE.md
+Add timing info to the execution of plot_clusters in cluster_driver.jl .  Use
+filter_roi to extract, just after reading smld in cluster_driver.jl, a roi of
+5 micrometers by 5 micrometers centered at x = 15, y = 15 micrometers.
+
+===
+
+Read SMLMAnanlysis/CLAUDE.md
+Read SMLMClustering/CLAUDE.md
+cluster_driver.jl produces Gaussian images of the supplied .h5 file s well as
+the cluster boundaries, but the boundaries don't properly overlay the Gaussian
+image.  What could be the problem?
+
+===
+
+Read SMLMCluster/CLAUDE.md
+Edit SMLMClustering.jl to provide tests for cluster boundaries, including a
+simple cluster with points {(0,0), (1,1), (2,1), (3,0), (3,2), (0,2)}
+and boundary configuration shrink = 0, 0.5, 1 (tight alpha shape, alpha
+shavem convex hull).
+
+===
+
+xxx
+Modify boundary_cluster to, in addition, return the area and perimeter of the
+cluster boundary computed.  Modify boundary_clusters to return the areas and
+perimeters of all the cluster boundaries computed.  Modify test_boundary.jl  to
+test these new features.
+
+===
+
+Read SMLMCluster/CLAUDE.md
+Add a src/backend routine to compute cluster statistics from cluster
+coordinates and cluster boundaries, in general.  For now, compute from
+the cluster boundaries, the areas and perimeters of each cluster found
+and return these values for further processing (to be specified later).
+
+change the plan above to create statistics.jl rather than 
+boundary_statistics.jl in order to encapsulate all statistics collection in
+one routine.
+
+===
+
+#Read SMLMCluster/CLAUDE.md
+#Modify cluster_driver.jl to plot a second cluster image in which the
+#cluster boundaries overlay the simple round clustered points (produced
+#by render strategy :circle), using white for the boundary lines.
+#The new image file will have the suffix _smld_direct_clusters.png.
+
+===
+
+Modify cluster_driver.jl to make a 2nd plot that is exactly like the 1st,
+except that the cluster boundary lines are white only and the following
+GaussianRender() options are set;
+   use_localization_precisio = false,
+   fixed_sigma = 20.0,
+The new image file will have the suffix "_dot_clusters.png".
+
+===
+
+Modify cluster_driver.jl as folllows;
+For the 1st plot, set "color_by=:id, categorical=true,", while for the 2nd
+plot, make the dots colored by :id while the cluster boundaries remain white.
+
+===
+
+Can you find in one of the papers* directories (paper-genmab-hexabody or
+papers-geometry) a script or part of one that renders dbscan smld results
+to create a png image file like
+/mnt/nas/cellpath/papers-geometry/julia-analysis-results/dstorm/20231218_IgE-DF3/DF310nM5min/Cell_06/14_render/gaussianrender_tab10_id_50x.png
+
+===
+
+Take cluster_driver.jl and replace the 2nd plot by the 2nd plot from
+cluster_driver11.jl .
+
+===
+
+Separate cluster_driver.jl into (1) plot_clusters.jl containing plot_clusters
+and anything under it, and (2) cluster_driver.jl containing everything else.
+
+===
+
+Make the definition of boundary_linewidth in plot_clusters explicitly depend on
+a definition in cluster_driver.
+
+===
+
+Install plot_clusters.jl into src/backends in the current repo, making
+necessary changes in cluster_driver.jl
+
+===
+
+Move the defintion of boundary_linewidth from cluster_driver.jl back to
+plot clusters.jl to keep the code from becoming too complicated.
+
+===
+
+edit as above but leave using CairoMakie and SMLMRender is plot_clusters
+
+===
+
+In src/backends/statistics.jl, rename the arrays areas to area and perimeters
+to perimeter, propagating the changes to cluster_driver.jl in the current
+directory.
+
+===
+
+Add cluster statistics as defined in ./STATISTICS (name, description), except
+where pre-existing, to src/backends/statistics.jl  
+
+---
+
+Summary
+
+  Added every statistic from dev/boundary/STATISTICS to
+  src/backends/statistics.jl that wasn't already covered by ClusterInfo
+  (n_clusters/n_points/n_clustered/n_isolated were skipped as pre-existing):
+
+  - ClusterBoundaryStatisticsInfo grew from 5 fields to 27: boundary
+  indices/area/perimeter at three tightnesses (general, convex-hull, tightest
+  alpha-shape), shape descriptors (equiv_radii, compactness, circularity,
+  convexity, solidity), point-count stats (center, n_pts_per_cluster,
+  n_pts_per_area, sigma_actual, cluster_width, nn_within_clust), and
+  inter-cluster spacing (min_c2c_dists/min_e2e_dists and their scalar minima).
+  - boundary_statistics gained a per_dataset::Bool=true keyword so it can
+  regroup smld_out emitters per cluster the same way boundary_clusters did;
+  area/perimeter computation is untouched (still derived purely from binfo's
+  stored polygon), and every new field degrades to NaN/empty rather than
+  throwing when a cluster has no matching raw points.
+  - Updated dev/boundary/cluster_driver.jl's call site and
+  test/test_boundary.jl's positional-constructor tests and assertions
+  accordingly.
+
+  Both test tiers pass (305/305 fast, 1218/1218 full). One note worth flagging:
+  convexity (perimeterConvex / perimeterTight) isn't bounded above by 1 the way
+  the STATISTICS doc's description implies — the shrink=1 "tightest" alpha shape
+  from the existing boundary_cluster keeps only the largest boundary loop,
+  which can trace a small sub-triangle of the cluster rather than an enclosing
+  curve, occasionally making it shorter than the convex hull's perimeter. That's
+  inherent to the pre-existing boundary_cluster algorithm, not something
+  introduced here — documented in the code and test comments rather than
+  "fixed."
+
+===
+
+In the recently modified files, replace the variable nn_within_clust by
+nn_within_clusters.  Also, add into the doc where cluster statistics are
+computed, the citation:
+
+   https://pmc.ncbi.nlm.nih.gov/articles/PMC10091357/
+   Predictive modeling using shape statistics for interpretable and robust
+   quality assurance of automated contours in radiation treatment planning
+   Zachary T Wooten, Cenji Yu, Laurence E Court, Christine B Peterson
+   PMCID: PMC10091357  NIHMSID: NIHMS1888738  PMID: 36540994
+
+===
+
+Modify cluster_driver,jl to print out each statistic on a separate line.  If
+the statistic is an array per cluster, write out the result as mean +/- std
+like as being currently done for area and perimeter.  If the stastistic is a
+single number, print it out.  Exclude printing "center" and the various
+indices.
+
+===
+
+In the recently modified files, change the variable equiv_radii to
+equiv_radius.
+
+===
+
+Add to sinfo in cluster_driver.j and print out with the other statistics:
+   n_locs_in         total number of input localizations
+   n_clustered       total number of points in clusters
+   n_noise           total number of points not in clusters
+   algorithm         clustering algorithm used
+   shrink            shrnk factor used in boundary determination
+
+===
+
+Add to sinfo in cluster_driver.jl and print out with the other statistics:
+   date_time         date and time this analysis was run
+
+===
+
+For cluster_driver.jl and BoundaryClustersConfig and ClusterBoundaryInfo, set
+the default value of per_dataset to false.
+
+===
+
+Copy cluster_driver.jl to boundary_driver.jl, and modify the latter to remove
+using an existing smld file, creating the smld by simulating (usiing SMLMSim)
+a realistic small set of localizations from a ground truth consisting of
+several clusters.
+
+===
+
+Integrate boundary_driver.jl, less the plotting section and the variables
+plotting and results_dir, into test/test_cluster_statistics.jl .  Remove all
+the print statements in the new code.
+
+===???
+
+I would like to adapt the new cluster statistics to be compatible with the
+use of ClusterInfo and ClusterStatisticsInfo for computing spatial statistics.
+
+=== 
+
+Rename SMLMClustering.jl/src/backends/statistics,jl to
+SMLMClustering.jl/src/backends/boundary_statistics,jl and associated changes
+in the repository to keep it working.
+
+===???
+
+Update SMLMClustering/README.md to include new entry points:
+   boundary_clusters
+   boundary_statistics
+   plot_clusters
+
+===
+
+Move src/backends
+   boundary_clusters.jl
+   boundary_statistics.jl
+   plot_clusters.jl
+to src/boundary and associated changes.  Also, clean up
+test/test_boundary_statistics.jl of unrelated material for boundary statistics,

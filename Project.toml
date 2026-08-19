@@ -28,7 +28,7 @@ CairoMakie = "0.12 - 0.16"
 Clustering = "0.15"
 DelaunayTriangulation = "1"
 Distances = "0.10.12"
-JLD2 = "0.6"
+JLD2 = "0.4, 0.5, 0.6"
 NearestNeighbors = "0.4"
 SMLMData = "0.7"
 SMLMRender = "0.1 - 0.5"
@@ -36,7 +36,8 @@ julia = "1.10"
 
 [extras]
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+SMLMSim = "5a0a87e4-02d4-41f5-bf26-b8c94c784a04"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "JLD2"]
+test = ["Test", "JLD2", "SMLMSim"]

@@ -1,0 +1,50 @@
+   n_clusters        number of clusters
+   n_points          total number of points
+   n_clustered       number of points in clusters
+   n_isolated        number of points not in clusters
+   indices           array of boundary indices relative to the array of x,y
+                     locations per cluster
+   indicesConvex     as indices but for convex hull boundaries (shrink = 0)
+   indicesTight      as indices but for the tightest alpha-shape boundaries
+                     (shrink = 1)
+   area              area of each cluster
+   areaConvex        area of each cluster using the convex hull boundary
+   areaTight         area of each cluster using the tightest boundary
+   perimeter         perimeter of each cluster
+   perimeterConvex   perimeter of each cluster using the convex hull boundary
+   perimeterTight    perimeter of each cluster using the tightest boundary
+   center            x,y center of each cluster
+   equiv_radius      equivalent radius of each cluster: sqrt(area / pi) / 2
+   compactness       4 pi area / perimeter^2 of each cluster
+                        [1 for a circle; 0 for a line segment]
+   circularity       4 pi areaTight / perimeterConvex^2 of each cluster
+                        [1 for a circle; < 1 for non-circular, but relatively
+                         insensitive to irregular boundaries]
+   convexity         perimeterConvex / perimeterTight of each cluster
+                        [1 for a convex object; < 1 if non-convex, e.g., one
+                         having an irregular boundary]
+   solidity          areaTight / areaConvex of each cluster
+                        [1 for a solid object; < 1 if irregular boundary or
+                         containing holes]
+   n_pts_per_cluster number of points per cluster
+   n_pts_per_area    number of points per area for clusters containing 3 or
+                     more points
+   sigma_actual      actual (computed) sigma of each cluster, that is, the
+                     standard deviation of the intracluster distances
+   cluster_width     maximum distance between vertices in each cluster
+   min_c2c_dists     minimum center-to-center distances for each cluster
+                     with respect to all the others
+   min_e2e_dists     minimum edge-to-edge distances for each cluster convex
+                     hull with respect to all the others
+   min_c2c_dist      min(min_c2c_dists)
+   min_e2e_dist      min(min_e2e_dists)
+   nn_within_clusters nearest neighbor distances between points within
+                     clusters only
+
+Reference:
+   #http://www.cyto.purdue.edu/cdroms/micro2/content/education/wirth10.pdf
+   https://pmc.ncbi.nlm.nih.gov/articles/PMC10091357/
+   Predictive modeling using shape statistics for interpretable and robust
+   quality assurance of automated contours in radiation treatment planning
+   Zachary T Wooten 1, Cenji Yu 2, Laurence E Court 2, Christine B Peterson 3
+   PMCID: PMC10091357  NIHMSID: NIHMS1888738  PMID: 36540994

@@ -1,0 +1,3 @@
+# syntax to run full set of tests
+SMLM_TEST_FULL=true julia --project=../.. -e 'using Pkg; Pkg.test()'
+
