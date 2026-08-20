@@ -1,7 +1,7 @@
 using SMLMSim             # simulate, StaticSMLMConfig, Nmer2D
 using SMLMData            # filter_roi
 using SMLMClustering      # cluster, cluster_statistics, boundary_clusters, …
-using SMLMRender          # GaussianRender (for the optional plotting block)
+using CairoMakie, SMLMRender # GaussianRender (for the optional plotting block)
 using Statistics          # mean, std
 using Dates               # now
 using Random              # seed!

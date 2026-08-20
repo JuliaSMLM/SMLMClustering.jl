@@ -1636,10 +1636,14 @@ uuid = "476501e8-09a2-5ece-8869-fb82de89a1fa"
 version = "0.6.46"
 
 [[deps.SMLMClustering]]
-deps = ["AdaptivePredicates", "CairoMakie", "Clustering", "Dates", "DelaunayTriangulation", "Distances", "JLD2", "NearestNeighbors", "Random", "SMLMData", "SMLMRender", "Statistics", "TOML"]
+deps = ["AdaptivePredicates", "Clustering", "Dates", "DelaunayTriangulation", "Distances", "NearestNeighbors", "Random", "SMLMData", "Statistics", "TOML"]
 path = "/home/mjwester/julia_shared_dev/SMLMClustering.jl"
 uuid = "5e733723-370a-41a4-ac41-ff3a91b0b806"
-version = "0.4.1"
+version = "0.4.3"
+weakdeps = ["CairoMakie", "SMLMRender"]
+
+    [deps.SMLMClustering.extensions]
+    SMLMClusteringFiguresExt = ["CairoMakie", "SMLMRender"]
 
 [[deps.SMLMData]]
 deps = ["Adapt", "MAT", "StaticArrays"]
