@@ -1,0 +1,56 @@
+BND_PTS_X = [0.0, 1.0, 2.0, 3.0, 3.0, 2.0, 1.0, 0.0]
+8-element Vector{Float64}:
+ 0.0
+ 1.0
+ 2.0
+ 3.0
+ 3.0
+ 2.0
+ 1.0
+ 0.0
+
+julia> BND_PTS_Y = [0.0, 1.0, 1.0, 0.0, 3.0, 2.0, 2.0, 3.0]
+8-element Vector{Float64}:
+ 0.0
+ 1.0
+ 1.0
+ 0.0
+ 3.0
+ 2.0
+ 2.0
+ 3.0
+
+julia> boundary_cluster(BND_PTS_X, BND_PTS_Y; shrink = 1.0)
+5-element Vector{Int64}:
+ 2
+ 3
+ 6
+ 7
+ 2
+
+julia> boundary_cluster(BND_PTS_X, BND_PTS_Y; shrink = 0.0)
+5-element Vector{Int64}:
+ 4
+ 5
+ 8
+ 1
+ 4
+
+julia> boundary_cluster(BND_PTS_X, BND_PTS_Y; shrink = 0.5)
+6-element Vector{Int64}:
+ 1
+ 4
+ 5
+ 6
+ 8
+ 1
+
+>> boundary(x, y, 1.0 or 0.0 or 0.5)
+
+ans =
+
+     1
+     4
+     5
+     8
+     1

@@ -55,6 +55,8 @@ struct _DummyClusterCfg <: AbstractClusterConfig end
     include("test_point_hysteresis.jl")
     include("test_edge_classify.jl")
     include("test_region.jl")
+    include("test_boundary.jl")
+    include("test_boundary_statistics.jl")
 
 end
 
