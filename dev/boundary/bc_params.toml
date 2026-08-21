@@ -1,0 +1,36 @@
+# params.toml — for boundary_cluster_driver.jl
+#
+# Usage:
+#   julia --project=. boundary_cluster_driver.jl \
+#       --smld <path.h5> --out <results_dir> [--params params.toml]
+
+per_dataset   = false   # shared by [dbscan] and [boundary] unless overridden
+plotting      = true
+pixel_size_nm = 1.0     # rendered pixel size (nm); smaller = finer detail
+
+# Optional ROI filter (μm). Delete this whole table to skip ROI filtering
+# and cluster the full field of view.
+[roi]
+x_min = 12.5
+x_max = 17.5
+y_min = 12.5
+y_max = 17.5
+
+# -> DBSCANConfig(; kw...)
+[dbscan]
+eps_nm             = 25.0  # neighborhood radius in nm (required)
+min_points         = 3     # core-point threshold / min cluster size
+use_3d             = false # include z-coordinate
+remove_unclustered = false
+
+# -> BoundaryClustersConfig(; kw...)
+[boundary]
+shrink = 0.05  # 0 = convex hull, 1 = tightest alpha-shape
+
+# -> ClusterPlotConfig(; kw...); only used if plotting = true
+[plot]
+colormap       = "inferno"  # good contrast for SMLM density images
+color_by       = "id"       # color each localization by its cluster id
+categorical    = true
+show_centroids = false
+boundary_color = "white"

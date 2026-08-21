@@ -363,3 +363,10 @@ Move src/backends
    plot_clusters.jl
 to src/boundary and associated changes.  Also, clean up
 test/test_boundary_statistics.jl of unrelated material for boundary statistics,
+
+===
+
+Construct an example in the style of SMLMClustering/examples, an example based
+on cluster_driver.jl, where the input smld_path and output results_dir are
+passed arguments and the rest of the parameters are in a params.toml file.  Put
+the example here for now in a file called boundary_cluster_driver,jl
