@@ -1,0 +1,204 @@
+using SMLMAnalysis        # render, load_smld, RenderConfig, GaussianRender, BasicSMLD, …
+using SMLMClustering      # cluster, cluster_statistics, boundary_clusters, …
+using CairoMakie          # Figure, Axis, image!, lines!, scatter!, save
+
+## ─────────────────────────────────────────────────────────────────────────────
+## Cluster-visualization subroutine
+## ─────────────────────────────────────────────────────────────────────────────
+
+"""
+Configuration for `plot_clusters`.  All fields have sensible defaults so the
+caller can override only what matters.
+"""
+Base.@kwdef struct ClusterPlotConfig
+    # ── background render ──────────────────────────────────────────
+    pixel_size_nm  :: Float64  = 100.0     # rendered pixel size (nm); smaller = finer detail
+    colormap       :: Symbol   = :inferno  # colormap applied to the Gaussian density image
+    scalebar       :: Bool     = true      # draw a physical scale bar on the rendered image
+
+    # ── cluster centroid markers ───────────────────────────────────
+    show_centroids :: Bool    = true    # draw ×  at each cluster's centroid
+    centroid_size  :: Float64 = 12.0   # marker size in screen points
+    centroid_color :: Any     = :white  # marker colour (any Makie-compatible colour)
+
+    # ── boundary-polygon overlay (optional) ───────────────────────
+    # Pass the ClusterBoundaryInfo returned by boundary_clusters() to draw
+    # each cluster's alpha-shape outline.  nothing = no boundary overlay.
+    boundaries    :: Union{ClusterBoundaryInfo, Nothing} = nothing
+    boundary_linewidth :: Float64 = 1.5  # outline line width in points
+
+    # ── output ────────────────────────────────────────────────────
+    filename    :: Union{String, Nothing} = nothing  # PNG save path; nothing = skip saving
+    figure_size :: Tuple{Int,Int}         = (900, 900)  # figure size in pixels
+end
+
+"""
+    plot_clusters(smld, smld_out, cfg) -> Figure
+
+Render a Gaussian super-resolution image of `smld` (all localizations) and
+overlay cluster indicators derived from `smld_out` (emitter `.id` field).
+
+The rendered image uses SMLMRender's `GaussianRender` strategy with the pixel
+size and colormap specified in `cfg`.  Physical μm coordinates are recovered
+from the emitter data so that boundary polygons and centroid markers align
+correctly with the rendered image.
+
+## Optional boundary overlay
+If `cfg.boundaries` is a `ClusterBoundaryInfo` (returned by `boundary_clusters`),
+each cluster's boundary polygon is drawn as a coloured closed curve on top of
+the image.  Colours cycle through a small qualitative palette.
+
+## Output
+Returns the CairoMakie `Figure`.  If `cfg.filename !== nothing` the figure is
+also saved to that path (format determined by file extension, e.g. ".png").
+"""
+function plot_clusters(smld    :: BasicSMLD,
+                       smld_out :: BasicSMLD,
+                       cfg     :: ClusterPlotConfig)
+
+    # ── 1. Render the Gaussian background image ───────────────────────────────
+    # render() in pixel_size mode derives data bounds from emitter positions
+    # and adds a 5 % margin on each side (SMLMRender default).
+    (bg_img, rinfo) = render(smld, RenderConfig(
+        strategy   = GaussianRender(),
+        pixel_size = cfg.pixel_size_nm,
+        colormap   = cfg.colormap,
+        scalebar   = cfg.scalebar,
+    ))
+
+    # ── 2. Re-derive the physical coordinate bounds ───────────────────────────
+    # We mimic SMLMRender's create_target_from_smld(; pixel_size) so that the
+    # CairoMakie axis uses the same μm ranges as the rendered pixels.
+    emitter_x = [e.x for e in smld.emitters]
+    emitter_y = [e.y for e in smld.emitters]
+    x_min_d, x_max_d = extrema(emitter_x)
+    y_min_d, y_max_d = extrema(emitter_y)
+    mg = 0.05                                  # 5 % margin (matches SMLMRender default)
+    x_min = x_min_d - mg * (x_max_d - x_min_d)
+    x_max = x_max_d + mg * (x_max_d - x_min_d)
+    y_min = y_min_d - mg * (y_max_d - y_min_d)
+    y_max = y_max_d + mg * (y_max_d - y_min_d)
+
+    # ── 3. Assemble the figure ────────────────────────────────────────────────
+    n_clustered = count(e -> e.id > 0, smld_out.emitters)
+    n_total     = length(smld_out.emitters)
+
+    fig = Figure(size = cfg.figure_size)
+    ax  = Axis(fig[1, 1];
+        xlabel    = "x (μm)",
+        ylabel    = "y (μm)",
+        title     = "Clusters: $n_clustered / $n_total localizations clustered",
+        yreversed = true,   # SMLM y increases downward (camera convention)
+    )
+
+    # Display the rendered image.
+    # bg_img has layout [row, col] = [y_pixel, x_pixel].
+    # CairoMakie's image! expects data[i,j] at (x[i], y[j]), so we transpose
+    # to [col, row] = [x_pixel, y_pixel] before passing.
+    image!(ax, (x_min, x_max), (y_min, y_max),
+           permutedims(bg_img, (2, 1)))
+
+    # ── 4. Cluster centroid markers ───────────────────────────────────────────
+    if cfg.show_centroids
+        # Group clustered emitters by (dataset, cluster_id) — id == 0 is noise.
+        clustered = filter(e -> e.id > 0, smld_out.emitters)
+        if !isempty(clustered)
+            cluster_keys = sort!(unique((e.dataset, e.id) for e in clustered))
+            for (ds, cid) in cluster_keys
+                ex = [e.x for e in clustered if e.dataset == ds && e.id == cid]
+                ey = [e.y for e in clustered if e.dataset == ds && e.id == cid]
+                # Centroid = arithmetic mean of cluster member positions.
+                cx = sum(ex) / length(ex)
+                cy = sum(ey) / length(ey)
+                scatter!(ax, [cx], [cy];
+                    marker     = :xcross,
+                    markersize = cfg.centroid_size,
+                    color      = cfg.centroid_color,
+                )
+            end
+        end
+    end
+
+    # ── 5. Boundary-polygon overlay (optional) ────────────────────────────────
+    if cfg.boundaries !== nothing
+        binfo = cfg.boundaries
+
+        # Qualitative colour palette — cycles for data sets with many clusters.
+        palette = [:cyan, :yellow, :magenta, :lime, :orange,
+                   :red,  :blue,   :white,   :pink, :aqua]
+
+        for (j, _key) in enumerate(binfo.cluster_keys)
+            bx = binfo.boundaries_x[j]   # closed polygon x-coords in μm
+            by = binfo.boundaries_y[j]   # closed polygon y-coords in μm
+            isempty(bx) && continue       # skip clusters that produced no boundary
+
+            lines!(ax, bx, by;
+                color     = palette[mod1(j, length(palette))],
+                linewidth = cfg.boundary_linewidth,
+            )
+        end
+    end
+
+    # ── 6. Save to file if a path was provided ────────────────────────────────
+    if cfg.filename !== nothing
+        save(cfg.filename, fig)
+        println("Saved → ", cfg.filename)
+    end
+
+    return fig
+end
+
+## ─────────────────────────────────────────────────────────────────────────────
+## Main driver
+## ─────────────────────────────────────────────────────────────────────────────
+
+smld_path = "/mnt/nas/lidkelab/Personal Folders/MJW/Julia/publish/resultsH5/" *
+            "Data_2025-11-20-10-52-19_result_smld.h5"
+smld = load_smld(smld_path)
+
+# ── Clustering (DBSCAN) ───────────────────────────────────────────────────────
+cfg_dbscan = DBSCANConfig(
+    eps_nm             = 50.0,  # neighborhood radius in nm (required)
+    min_points         = 5,     # core-point threshold / min cluster size
+    use_3d             = false, # include z-coordinate
+    per_dataset        = true,  # cluster within each dataset independently
+    remove_unclustered = false,
+)
+(smld_out, info_dbscan) = cluster(smld, cfg_dbscan)
+println(smld_out)
+println(info_dbscan)
+
+# ── Cluster boundaries (alpha-shape) ─────────────────────────────────────────
+cfg_bnd = BoundaryClustersConfig(
+    shrink      = 0.0,  # 0 = convex hull, 1 = tightest alpha-shape
+    per_dataset = true, # must match the per_dataset value used in cluster()
+)
+(_, binfo) = boundary_clusters(smld_out, cfg_bnd)
+println(binfo)
+# binfo.boundaries_x[j] / binfo.boundaries_y[j] trace the boundary polygon of
+# cluster binfo.cluster_keys[j] in μm (closed: first point == last point).
+
+# ── Cluster visualization ─────────────────────────────────────────────────────
+# Derive a PNG filename from the data file (placed next to this script).
+png_path = splitext(basename(smld_path))[1] * "_clusters.png"
+
+plot_cfg = ClusterPlotConfig(
+    pixel_size_nm = 100.0,         # 10 nm pixels → fine enough for 50 nm DBSCAN
+    colormap      = :inferno,      # good contrast for SMLM density images
+    boundaries    = binfo,         # draw alpha-shape outlines for each cluster
+    show_centroids = false,
+    filename      = png_path,
+)
+fig = plot_clusters(smld, smld_out, plot_cfg)
+
+# ── Hopkins clustering statistic ─────────────────────────────────────────────
+cfg_hop = HopkinsConfig(
+    n_samples      = 50,   # reference / sampled point count per repeat
+    random_repeats = 10,   # average over independent repeats
+    seed           = 1,    # RNG seed for reproducibility
+    use_3d         = false,
+    per_dataset    = true, # report per-dataset H in extras + mean as `statistic`
+)
+(_, info_hop) = cluster_statistics(smld, cfg_hop)
+println("Hopkins H = ", round(info_hop.statistic, digits = 3))
+println("per-dataset H = ", info_hop.extras[:hopkins_per_dataset])

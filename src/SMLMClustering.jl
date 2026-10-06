@@ -29,6 +29,7 @@ using Distances
 using DelaunayTriangulation
 using NearestNeighbors
 using Random
+using Statistics: mean, std
 
 export AbstractClusterConfig, ClusterInfo, cluster,
        DBSCANConfig, PrecisionDBSCANConfig,
@@ -38,7 +39,11 @@ export AbstractClusterConfig, ClusterInfo, cluster,
        PointHysteresisConfig,
        AbstractStatisticsConfig, ClusterStatisticsInfo, cluster_statistics,
        HopkinsConfig, VoronoiDensityConfig, LocalContrastFeature,
-       CellPolygon, MultiCellMask, build_mask, in_region, region_area
+       CellPolygon, MultiCellMask, build_mask, in_region, region_area,
+       boundary_cluster, BoundaryClustersConfig, ClusterBoundaryInfo,
+       boundary_clusters,
+       ClusterBoundaryStatisticsInfo, boundary_statistics,
+       ClusterPlotConfig, plot_clusters
 
 include("types.jl")
 include("utils.jl")
@@ -53,6 +58,9 @@ include("backends/voronoi_density.jl")
 include("backends/local_contrast.jl")
 include("backends/mrf_density.jl")
 include("backends/point_hysteresis.jl")
+include("boundary/boundary.jl")
+include("boundary/boundary_statistics.jl")
+include("boundary/plot_clusters.jl")
 
 include("edge_classify/EdgeClassify.jl")
 using .EdgeClassify: classify_emitters,

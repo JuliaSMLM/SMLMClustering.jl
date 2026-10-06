@@ -141,4 +141,109 @@ function SMLMClustering.plot_edge_report(report::SMLMClustering.EdgeReport;
     return paths
 end
 
+# ---- plot_clusters (SMLMClustering cluster/boundary visualization) ---------
+
+function SMLMClustering.plot_clusters(smld     :: BasicSMLD,
+                                       smld_out :: BasicSMLD,
+                                       cfg      :: ClusterPlotConfig)
+
+    strategy = cfg.render_strategy === nothing ? GaussianRender() : cfg.render_strategy
+
+    # ── 1. Render the Gaussian background image ───────────────────────────────
+    # render() in pixel_size mode derives data bounds from emitter positions
+    # and adds a 5 % margin on each side (SMLMRender default).
+    (bg_img, rinfo) = render(smld, RenderConfig(
+        strategy        = strategy,
+        pixel_size      = cfg.pixel_size_nm,
+        colormap        = cfg.colormap,
+        scalebar        = cfg.scalebar,
+        scalebar_length = cfg.scalebar_length,
+        color_by        = cfg.color_by,
+        categorical     = cfg.categorical,
+    ))
+
+    # ── 2. Re-derive the physical coordinate bounds ───────────────────────────
+    # We mimic SMLMRender's create_target_from_smld(; pixel_size) so that the
+    # CairoMakie axis uses the same μm ranges as the rendered pixels.
+    emitter_x = [e.x for e in smld.emitters]
+    emitter_y = [e.y for e in smld.emitters]
+    x_min_d, x_max_d = extrema(emitter_x)
+    y_min_d, y_max_d = extrema(emitter_y)
+    mg = 0.05                                  # 5 % margin (matches SMLMRender default)
+    x_min = x_min_d - mg * (x_max_d - x_min_d)
+    x_max = x_max_d + mg * (x_max_d - x_min_d)
+    y_min = y_min_d - mg * (y_max_d - y_min_d)
+    y_max = y_max_d + mg * (y_max_d - y_min_d)
+
+    # ── 3. Assemble the figure ────────────────────────────────────────────────
+    n_clustered = count(e -> e.id > 0, smld_out.emitters)
+    n_total     = length(smld_out.emitters)
+
+    fig = Figure(size = cfg.figure_size)
+    ax  = Axis(fig[1, 1];
+        xlabel    = "x (μm)",
+        ylabel    = "y (μm)",
+        title     = "Clusters: $n_clustered / $n_total localizations clustered",
+        yreversed = true,   # SMLM y increases downward (camera convention)
+    )
+
+    # Display the rendered image.
+    # bg_img has layout [row, col] = [y_pixel, x_pixel].
+    # CairoMakie's image! expects data[i,j] at (x[i], y[j]), so we transpose
+    # to [col, row] = [x_pixel, y_pixel] before passing.
+    image!(ax, (x_min, x_max), (y_min, y_max),
+           permutedims(bg_img, (2, 1)))
+
+    # ── 4. Cluster centroid markers ───────────────────────────────────────────
+    if cfg.show_centroids
+        # Group clustered emitters by (dataset, cluster_id) — id == 0 is noise.
+        clustered = filter(e -> e.id > 0, smld_out.emitters)
+        if !isempty(clustered)
+            cluster_keys = sort!(unique((e.dataset, e.id) for e in clustered))
+            for (ds, cid) in cluster_keys
+                ex = [e.x for e in clustered if e.dataset == ds && e.id == cid]
+                ey = [e.y for e in clustered if e.dataset == ds && e.id == cid]
+                # Centroid = arithmetic mean of cluster member positions.
+                cx = sum(ex) / length(ex)
+                cy = sum(ey) / length(ey)
+                scatter!(ax, [cx], [cy];
+                    marker     = :xcross,
+                    markersize = cfg.centroid_size,
+                    color      = cfg.centroid_color,
+                )
+            end
+        end
+    end
+
+    # ── 5. Boundary-polygon overlay (optional) ────────────────────────────────
+    if cfg.boundaries !== nothing
+        binfo = cfg.boundaries
+
+        # Qualitative colour palette — cycles for data sets with many clusters.
+        palette = [:cyan, :yellow, :magenta, :lime, :orange,
+                   :red,  :blue,   :white,   :pink, :aqua]
+
+        for (j, _key) in enumerate(binfo.cluster_keys)
+            bx = binfo.boundaries_x[j]   # closed polygon x-coords in μm
+            by = binfo.boundaries_y[j]   # closed polygon y-coords in μm
+            isempty(bx) && continue       # skip clusters that produced no boundary
+
+            line_color = cfg.boundary_color !== nothing ? cfg.boundary_color :
+                         palette[mod1(j, length(palette))]
+            lines!(ax, bx, by;
+                color     = line_color,
+                linewidth = cfg.boundary_linewidth,
+            )
+        end
+    end
+
+    # ── 6. Save to file if a path was provided ────────────────────────────────
+    if cfg.filename !== nothing
+        save(cfg.filename, fig)
+        println("Saved → ", cfg.filename)
+    end
+
+    return fig
+end
+
 end # module

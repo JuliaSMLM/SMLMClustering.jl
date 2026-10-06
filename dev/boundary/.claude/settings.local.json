@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(julia --project=. --startup-file=no)",
+      "Bash(2>&1)",
+      "Read(//home/mjwester/julia_shared_dev/SMLMClustering.jl/**)",
+      "Bash(julia --project=. tmp/c_d.jl)",
+      "Bash(julia --project=. -e 'import Pkg; Pkg.add\\(\"CairoMakie\"\\)')"
+    ]
+  }
+}
