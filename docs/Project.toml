@@ -4,3 +4,4 @@ SMLMClustering = "5e733723-370a-41a4-ac41-ff3a91b0b806"
 
 [compat]
 Documenter = "1"
+SMLMClustering = "0.4.3"
