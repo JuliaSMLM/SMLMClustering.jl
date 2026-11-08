@@ -2,13 +2,6 @@ using Test
 using Random
 using SMLMClustering
 using SMLMData
-import JLD2
-
-# Fixtures live in shared ~/edge_fixtures/ (not in-repo); parity/robustness run
-# only under the thorough tier + when present.
-const _EDGE_FIX_DIR = joinpath(homedir(), "edge_fixtures")
-const _PARITY_FIX   = joinpath(_EDGE_FIX_DIR, "parity_a431_cell01.jld2")
-const _ROBUST_FIX   = joinpath(_EDGE_FIX_DIR, "robustness_fovs.jld2")
 
 # A dummy concrete subtype to exercise the unsupported-config fallback error.
 struct _UnsupportedEdgeConfig <: SMLMClustering.AbstractEdgeClassifyConfig end
@@ -187,61 +180,6 @@ const _FOV = (0.0, 10.0, 0.0, 10.0)
             @test occursin("schema_version: 2", hdr[1])
             @test occursin("in_cell", hdr[6])
         end
-    end
-
-    # ---- validated fixtures (thorough tier + presence) -----------------------
-
-    if SMLM_TEST_FULL && isfile(_PARITY_FIX)
-        @testset "A431 WT Cell_01 (multi-cell rewrite — structural)" begin
-            # The old bit-for-bit class fixture was RETIRED: the multi-cell rewrite
-            # changed the labeling algorithm by design (density-adaptive α, no FOV
-            # reflection, in_region labeling, FOV-edge-excluded membrane). This is now
-            # a structural regression check on the same dense single cell.
-            fx = JLD2.load(_PARITY_FIX)
-            x = Float64.(fx["x_um"]); y = Float64.(fx["y_um"])
-            fov = Tuple(Float64.(fx["fov_um"]))
-            info = classify_emitters(x, y, KdeValleyConfig(); fov_um = fov)
-            @test info.n_outside + info.n_membrane + info.n_interior == info.n_emitters
-            @test info.n_interior > 0
-            @test !isempty(info.cells)
-            @test info.outer_polygon == info.cells[1].outer
-            @test all((info.class .!= :outside) .== info.inside_outer)
-            @test interior_fraction(info) > 0.8       # dense, well-defined single cell
-            @info "A431 (regenerated counts)" n_interior = info.n_interior n_membrane = info.n_membrane n_outside = info.n_outside n_cells = length(info.cells)
-        end
-    else
-        @info "kde_valley A431 test skipped (needs SMLM_TEST_FULL + $_PARITY_FIX)"
-    end
-
-    if SMLM_TEST_FULL && isfile(_ROBUST_FIX)
-        @testset "robustness — density-spanning FOVs" begin
-            fx = JLD2.load(_ROBUST_FIX)
-            tags = unique(first(split(k, "/")) for k in keys(fx) if occursin("/x_um", k))
-            for tag in tags
-                x = Float64.(fx["$tag/x_um"]); y = Float64.(fx["$tag/y_um"])
-                fov = Tuple(Float64.(fx["$tag/fov_um"]))
-                v1key = "$tag/v1_n_interior"
-                has_cell = haskey(fx, v1key) && isfinite(float(fx[v1key])) && Int(fx[v1key]) > 0
-                if has_cell
-                    info = classify_emitters(x, y, KdeValleyConfig(); fov_um = fov)
-                    @test info.n_interior > 0
-                    @test info.n_outside + info.n_membrane + info.n_interior == info.n_emitters
-                    # Soft sanity bound only — the exact v1-count comparison was retired
-                    # with the multi-cell rewrite (different labeling algorithm by design).
-                    @test 0.3 <= interior_fraction(info) <= 0.995
-                else
-                    bounded = try
-                        classify_emitters(x, y, KdeValleyConfig(); fov_um = fov).n_interior >= 0
-                    catch
-                        false
-                    end
-                    @test (bounded || true)
-                    @info "robustness floor case" tag bounded
-                end
-            end
-        end
-    else
-        @info "kde_valley robustness test skipped (needs SMLM_TEST_FULL + $_ROBUST_FIX)"
     end
 
 end

@@ -176,7 +176,7 @@ emitter order), `mrf_lambda_used` (per-group smoothness weight),
 
 #### When it works
 
-Characterized on a controlled 5×5 μm A431-mimic synthetic (kNN density
+Characterized on a controlled 5×5 μm synthetic (kNN density
 estimator, k=20, 2 regimes, ~13–22 k emitters across 12 patches, AR 1–20).
 Headline accuracy by density ratio (high / low):
 

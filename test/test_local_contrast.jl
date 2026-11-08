@@ -103,7 +103,7 @@ using Statistics
         # Linearly-increasing density along x: a small region in the
         # low-density (left) side that is locally elevated should get higher
         # contrast than the globally-denser right side, even though the right
-        # side has higher *absolute* density. This is the RGY left/right fix.
+        # side has higher *absolute* density.
         pts = Tuple{Float64, Float64, Int}[]
         # Background: density rises with x (sample x from triangular distribution).
         for _ in 1:3000

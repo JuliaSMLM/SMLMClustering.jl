@@ -208,7 +208,7 @@ surviving (large-enough) connected component.
 
 ## When it works / accuracy
 
-Characterized on a controlled 5×5 µm A431-mimic synthetic (kNN density
+Characterized on a controlled 5×5 µm synthetic (kNN density
 estimator, `density_k=20`, 2 regimes, ~13–22 k emitters across 12 patches,
 aspect ratios 1–20). Headline accuracy by density ratio (high / low):
 

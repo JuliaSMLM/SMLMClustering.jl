@@ -1,10 +1,6 @@
 """
 Internal: density gates. The multi-K k-NN cell mask lives in `geometry.jl`
 (`_cell_mask`); this file holds the KDE-valley gate used by `KdeValleyConfig`.
-
-Validated functions ported verbatim from the genmab production wrapper
-(`paper-genmab-hexabody/src/edge_mask.jl`); only the parameter source changes
-(config fields instead of a flat dict).
 """
 
 # Continuous Gaussian-KDE density at each point (fixed bandwidth `sigma`, µm).

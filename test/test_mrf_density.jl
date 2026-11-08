@@ -482,12 +482,12 @@ using Statistics
 
     if SMLM_TEST_FULL
     @testset "kNN density estimator outperforms Voronoi on elongated patches (Round 012)" begin
-        # Mini A431-mimic: low-density background plus three thick rectangular
+        # Mini synthetic: low-density background plus three thick rectangular
         # patches (AR 4-7) at 4× density. Both estimators work here, but kNN
         # consistently outperforms Voronoi because cells along the patch
         # boundary inflate. Tuned so kNN ball (k=8) stays mostly interior to
         # the patches; thinner patches need k≤6 and the dev/scripts/ diagnostic
-        # on the full A431-mimic shows the headline mitigation at AR 8-20.
+        # on the full synthetic shows the headline mitigation at AR 8-20.
         rng = Xoshiro(20260429)
 
         function in_rect(cx, cy, hw, hh, θ, x, y)
@@ -556,7 +556,7 @@ using Statistics
         @test acc_k >= 0.90
         # kNN must outperform Voronoi by a meaningful margin (validates the
         # mitigation isn't a wash). +5pp is a conservative lower bound;
-        # full A431-mimic shows +9pp; this mini synthetic shows ~7-8pp.
+        # full synthetic shows +9pp; this mini synthetic shows ~7-8pp.
         @test acc_k > acc_v + 0.05
     end
     end  # SMLM_TEST_FULL
