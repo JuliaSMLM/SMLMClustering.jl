@@ -176,9 +176,20 @@ cfg = MRFDensityClusterConfig(
 returns the `(means, vars, weights)` NamedTuple in log-density space, ready to
 pass as `regime_gaussians`. `calibrate_regime_thresholds(smld; n_regimes=2,
 density_estimator=:knn, density_k=20)` is a thin wrapper that returns instead a
-`Vector{Float64}` of length `n_regimes - 1` (the analytic Bayes decision
-boundaries between consecutive components, midpoint fallback when the
-discriminant is negative), ready to pass as `regime_thresholds`.
+`Vector{Float64}` of length `n_regimes - 1`, ready to pass as
+`regime_thresholds`: the analytic Bayes decision boundaries between consecutive
+components, i.e. the log-density at which the upper component's weighted density
+overtakes the lower one's. That point can lie outside the two means. A component
+that never has the highest weighted density between its neighbors gets an empty
+regime (two equal thresholds, at its neighbors' boundary). The midpoint between
+the means is used only when the two weighted densities never cross.
+
+Before 0.4.4 a sign error moved every threshold off the boundary (0.2–11.7% of
+localizations in the wrong hard regime on four of the lab's dSTORM cells at
+`n_regimes = 2`), and a boundary outside the two means was replaced by their
+midpoint. Measured against the fitted mixture's most probable component, on the
+same four cells that put 10.6–26.8% of localizations in another regime in the 10
+fits it changed at 3–4 regimes (0.6–5.3% now).
 
 ## Output & interpretation
 

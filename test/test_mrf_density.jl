@@ -181,6 +181,82 @@ include(joinpath(@__DIR__, "long", "utils", "helpers.jl"))
         @test maximum(errs) < 1e-8
     end
 
+    @testset "Bayes boundary outside the two means" begin
+        lwn(x, m, v, w) = log(w) - 0.5 * log(2π * v) - (x - m)^2 / (2v)
+        bnd = SMLMClustering._gaussian_decision_boundary
+        # Means 0 and 3, variances 1 and 0.25, the narrow upper component 400 times
+        # lighter: it wins only on [3.32, 4.68], beyond its own mean, so the boundary is
+        # 3.32, where it overtakes. The released code returned the midpoint 1.5.
+        w1, w2 = 400 / 401, 1 / 401
+        C = -36 + log(4) - 2 * log(w1 / w2)
+        t = bnd(0.0, 1.0, w1, 3.0, 0.25, w2)
+        @test t ≈ (24 - sqrt(576 + 12 * C)) / 6 atol = 1e-12
+        @test t > 3.0
+        @test lwn(t, 0.0, 1.0, w1) ≈ lwn(t, 3.0, 0.25, w2) atol = 1e-10
+        # Mirror: a narrow, light lower component; the boundary falls below the lower mean.
+        @test bnd(0.0, 0.25, w2, 3.0, 1.0, w1) ≈ 3.0 - t atol = 1e-12
+        # Random fits, those with the crossing outside the means included: wherever the
+        # weighted densities cross, the threshold is the crossing where the upper component
+        # overtakes the lower one.
+        rng = Xoshiro(12)
+        errs = Float64[]; rising = Bool[]; n_outside = 0
+        for _ in 1:2000
+            m1 = 4 * rand(rng); m2 = m1 + 0.5 + 3 * rand(rng)
+            v1 = 0.05 + 2 * rand(rng); v2 = 0.05 + 2 * rand(rng)
+            a = 0.02 + 0.96 * rand(rng); b = 1 - a
+            f = x -> lwn(x, m1, v1, a) - lwn(x, m2, v2, b)       # > 0: the lower one wins
+            xs = range(m1 - 30, m2 + 30; length = 20001)
+            (any(x -> f(x) > 0, xs) && any(x -> f(x) < 0, xs)) || continue
+            n_outside += (f(m1) > 0) == (f(m2) > 0)
+            x = bnd(m1, v1, a, m2, v2, b)
+            push!(errs, abs(f(x)))
+            push!(rising, f(x - 1e-6) > f(x + 1e-6))
+        end
+        @test n_outside > 100
+        @test maximum(errs) < 1e-8
+        @test all(rising)
+    end
+
+    @testset "regime thresholds: a component that never wins gets an empty regime" begin
+        lwn(x, m, v, w) = log(w) - 0.5 * log(2π * v) - (x - m)^2 / (2v)
+        thr = SMLMClustering._regime_thresholds
+        # Two components: the pairwise boundary.
+        @test thr((means = [0.0, 3.0], vars = [1.0, 0.25], weights = [0.5, 0.5])) ==
+              [SMLMClustering._gaussian_decision_boundary(0.0, 1.0, 0.5, 3.0, 0.25, 0.5)]
+        # Three equal-variance components, the middle one 50 times lighter: the pairwise
+        # boundaries 1|2 = 2.95 and 2|3 = 1.05 are out of order (the released code returned
+        # them, and cluster rejects unsorted thresholds), so component 2 never wins and both
+        # thresholds are the 1|3 boundary, 2.0.
+        fit3 = (means = [0.0, 2.0, 4.0], vars = [1.0, 1.0, 1.0], weights = [0.495, 0.01, 0.495])
+        @test thr(fit3) ≈ [2.0, 2.0] atol = 1e-12
+        # Equal variances: the thresholds reproduce the Bayes classifier argmax_k w_k N_k
+        # exactly (bins as in _unary_from_thresholds: x >= t_k is above regime k).
+        rng = Xoshiro(13)
+        agree = Bool[]; sorted = Bool[]; n_empty = 0
+        for _ in 1:300
+            K = rand(rng, 3:5)
+            m = sort(6 * rand(rng, K)); v = fill(0.1 + rand(rng), K)
+            w = 0.02 .+ rand(rng, K); w ./= sum(w)
+            t = thr((means = m, vars = v, weights = w))
+            push!(sorted, issorted(t))
+            n_empty += any(k -> t[k] == t[k+1], 1:K-2)
+            for x in range(m[1] - 3, m[end] + 3; length = 401)
+                bayes = argmax([lwn(x, m[k], v[k], w[k]) for k in 1:K])
+                push!(agree, 1 + count(<=(x), t) == bayes)
+            end
+        end
+        @test n_empty > 20
+        @test all(agree)
+        # Unequal variances: always sorted, so cluster accepts them.
+        for _ in 1:300
+            K = rand(rng, 3:5)
+            m = sort(6 * rand(rng, K)); v = 0.05 .+ 2 * rand(rng, K)
+            w = 0.02 .+ rand(rng, K); w ./= sum(w)
+            push!(sorted, issorted(thr((means = m, vars = v, weights = w))))
+        end
+        @test all(sorted)
+    end
+
     @testset "calibrate_regime_thresholds: argument validation" begin
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1),
                               (1.0, 1.0, 1), (0.5, 0.5, 1)])

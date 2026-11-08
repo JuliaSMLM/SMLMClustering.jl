@@ -74,8 +74,11 @@ Emitter coordinates on `AbstractEmitter` subtypes are stored in **microns**, but
 
 Clustering is then performed directly on the micron coordinate matrix, so the
 neighborhood test is the Euclidean distance $\le \varepsilon_{\mu m}$ in micron
-space. Neighbor queries use a KD-tree, which is what gives the backend its
-sub-quadratic scaling. Three passes run over the tree and store no neighbor list:
+space. The comparison is made on squared distances in `Float64`, so a pair placed
+at exactly ε in decimal can land on either side: at `eps_nm = 100`, points at
+x = 1.0 and 1.1 µm differ by 0.10000000000000009 and are not neighbors, while
+(0, 0) and (0.3, 0.4) at `eps_nm = 500` are. Neighbor queries use a KD-tree,
+which is what gives the backend its sub-quadratic scaling. Three passes run over the tree and store no neighbor list:
 core points are counted (threaded), core points within ε of each other are merged
 with union-find, and border points are then attached (threaded).
 

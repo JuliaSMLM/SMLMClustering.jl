@@ -268,13 +268,18 @@ function _gmm_em_1d(x::Vector{Float64}, k::Int;
 end
 
 # ----------------------------------------------------------------------------
-# Bayes decision boundary between two 1D Gaussians with weights, where
+# Bayes decision boundary between two 1D Gaussians with weights (μ1 < μ2), where
 # log(w1) + log N(x|μ1, σ1²) = log(w2) + log N(x|μ2, σ2²). Multiplying both sides
 # by −2 gives the quadratic A x² + B x + C = 0 below (the Gaussian normalizers
-# contribute +log σ1² − log σ2² to C); pick the root in [μ1, μ2] (the natural
-# inter-mode boundary). Falls back to the midpoint when the discriminant is
-# negative (one component dominates everywhere) or when the in-range root
-# selection is ambiguous.
+# contribute +log σ1² − log σ2² to C); its left side is 2 g(x) with
+# g = log(w2 N2) − log(w1 N1), the log-odds of the upper component.
+#
+# The vertex of g lies beyond the mean of the narrower component, so g rises
+# across [μ1, μ2]: the boundary is the root where g rises, (−B + √Δ)/(2A),
+# whether or not it lies between the means. (When both means fall on the same
+# side of it, the lighter component wins only beyond its own mean; that is still
+# where the hard regime changes.) Falls back to the midpoint only when the
+# discriminant is negative: no crossing, one component dominates everywhere.
 # ----------------------------------------------------------------------------
 function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
                                       μ2::Float64, σ²2::Float64, w2::Float64)
@@ -290,16 +295,43 @@ function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
         return (μ1 + μ2) / 2
     end
     s = sqrt(Δ)
-    x1 = (-B - s) / (2.0 * A)
-    x2 = (-B + s) / (2.0 * A)
-    lo, hi = minmax(μ1, μ2)
-    if lo <= x1 <= hi
-        return x1
-    elseif lo <= x2 <= hi
-        return x2
-    else
-        return (μ1 + μ2) / 2
+    # The rising root (−B + s)/(2A); for B > 0 the same root as 2C/(−B − s),
+    # which avoids cancellation when the variances are nearly equal.
+    return B > 0 ? 2.0 * C / (-B - s) : (-B + s) / (2.0 * A)
+end
+
+# ----------------------------------------------------------------------------
+# Hard-regime thresholds from a mean-sorted Gaussian fit: the Bayes boundary
+# between consecutive components, along the upper envelope of the weighted
+# densities. A component whose boundary with its lower neighbor is not below
+# its boundary with its upper neighbor never has the highest weighted density
+# between them; it is dropped, the boundary between its two neighbors is used,
+# and its regime is empty (equal consecutive thresholds). The first and last
+# components always remain. With equal variances this is exactly the Bayes
+# classifier.
+# ----------------------------------------------------------------------------
+function _regime_thresholds(fit)
+    μ, σ², w = fit.means, fit.vars, fit.weights
+    K = length(μ)
+    kept = [1]            # surviving components, in mean order
+    bnd = Float64[]       # bnd[a] = boundary between kept[a] and kept[a+1]
+    for j in 2:K
+        while true
+            i = kept[end]
+            b = _gaussian_decision_boundary(μ[i], σ²[i], w[i], μ[j], σ²[j], w[j])
+            if !isempty(bnd) && b <= bnd[end]
+                pop!(kept); pop!(bnd)          # component i never wins: drop it
+            else
+                push!(kept, j); push!(bnd, b)
+                break
+            end
+        end
     end
+    thresholds = Vector{Float64}(undef, K - 1)
+    for a in 1:(length(kept) - 1)
+        thresholds[kept[a]:(kept[a + 1] - 1)] .= bnd[a]
+    end
+    return thresholds
 end
 
 function _log_density_values(smld::SMLMData.BasicSMLD,
@@ -430,8 +462,13 @@ fixing the regime boundary at the value learned from a higher-quality fit.
 # Boundary computation
 Each threshold is the analytic Bayes decision boundary between consecutive
 GMM components (sorted ascending by mean), accounting for unequal variances
-and weights. Falls back to the midpoint between consecutive means when the
-quadratic discriminant is negative (one component dominates everywhere).
+and weights: the log-density at which the upper component's weighted density
+overtakes the lower one's. That point can lie outside the two means (a light
+component may win only beyond its own mean). A component that never has the
+highest weighted density between its neighbors gets an empty regime: its two
+thresholds are equal, at the boundary between its neighbors. Falls back to the
+midpoint between consecutive means when the quadratic discriminant is negative
+(one component dominates everywhere).
 
 # Returns
 `Vector{Float64}` of length `n_regimes - 1`, sorted ascending. Pass directly
@@ -471,14 +508,8 @@ function calibrate_regime_thresholds(smld::SMLMData.BasicSMLD;
                                      density_estimator = density_estimator,
                                      density_k = density_k)
 
-    # Decision boundary between each pair of consecutive (mean-sorted) components.
-    thresholds = Vector{Float64}(undef, n_regimes - 1)
-    @inbounds for k in 1:(n_regimes - 1)
-        thresholds[k] = _gaussian_decision_boundary(
-            fit.means[k],   fit.vars[k],   fit.weights[k],
-            fit.means[k+1], fit.vars[k+1], fit.weights[k+1])
-    end
-    return thresholds
+    # Bayes boundaries between consecutive (mean-sorted) components.
+    return _regime_thresholds(fit)
 end
 
 # ----------------------------------------------------------------------------
