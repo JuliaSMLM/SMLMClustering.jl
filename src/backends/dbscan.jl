@@ -1,9 +1,15 @@
 # DBSCAN backend.
 #
-# Density-Based Spatial Clustering of Applications with Noise, via Clustering.jl.
+# Density-Based Spatial Clustering of Applications with Noise (Ester et al. 1996).
 # Configuration subtypes `AbstractClusterConfig`; `cluster(smld, ::DBSCANConfig)`
 # writes per-emitter cluster labels into `emitter.id` (0 = noise, 1..K = cluster)
 # and returns `(smld_out, ClusterInfo)`.
+#
+# Runs on the package's own neighbor graph (`build_precision_neighbor_graph`, every
+# pair with d ≤ eps) and core/border pass (`_core_border_labels!`), shared with
+# PrecisionDBSCANConfig. It does not wrap `Clustering.dbscan`: Clustering.jl 0.15
+# adds the neighbors of every explored point to the cluster before testing whether
+# that point is core, so a cluster reached up to 2·eps past its last core point.
 #
 # Shared helpers (_coords_matrix, _group_by_dataset, etc.) are provided by utils.jl,
 # which is included before the backend files.
@@ -13,12 +19,21 @@
 
 Configuration for DBSCAN clustering of SMLM localizations.
 
+Classical DBSCAN (Ester et al. 1996): a point is *core* if at least `min_points`
+points, itself included, lie within `eps_nm` of it (distance `≤ eps_nm`). Core points
+within `eps_nm` of each other share a cluster. A non-core point joins a cluster only
+if it lies within `eps_nm` of one of that cluster's core points (the lowest cluster
+id when it is near cores of several clusters); otherwise it is noise. Labels are
+deterministic for a given emitter order.
+
 # Fields
 - `eps_nm::Float64`: neighborhood radius in **nanometers**. Coordinates on
   `AbstractEmitter` subtypes are in microns; the backend converts internally.
 - `min_points::Int = 5`: minimum number of points in an ε-neighborhood for a
   point to be a core point (classical DBSCAN `minPts`). Also used as the
-  minimum cluster size.
+  minimum cluster size: a cluster left with fewer than `min_points` members
+  (possible only when neighboring clusters take some of its border points)
+  becomes noise.
 - `use_3d::Bool = false`: if `true`, cluster in (x, y, z); requires
   `Emitter3DFit` emitters. Otherwise cluster in (x, y).
 - `per_dataset::Bool = true`: if `true`, cluster within each `dataset` index
@@ -64,38 +79,27 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
     n_clustered = 0
 
     for idxs in groups
-        # Skip empty groups defensively; Clustering.dbscan on 0 points is fine but
-        # we avoid building a zero-column matrix.
         isempty(idxs) && continue
 
         sub = view(smld.emitters, idxs)
         X = _coords_matrix(sub, cfg.use_3d)
-        res = Clustering.dbscan(
-            X, radius_μm;
-            min_neighbors = cfg.min_points,
-            min_cluster_size = cfg.min_points,
-        )
+        # Every pair with d ≤ eps (KDTree inrange, inclusive), all of them active.
+        g = build_precision_neighbor_graph(X, radius_μm)
+        labels = Vector{Int}(undef, g.n)
+        _core_border_labels!(labels, g, cfg.min_points, _all_active)
 
-        # Recount cluster sizes from `res.assignments` (the per-point labels),
-        # NOT from `res.counts`. Clustering.jl counts a boundary point that
-        # touches two clusters in *both* clusters' `counts`, so `sum(res.counts)`
-        # can exceed the point count — yielding inflated cluster sizes and even a
-        # negative n_noise. `assignments` is last-writer-wins and assigns each
-        # point exactly once, so it is the source of truth.
-        group_sizes = zeros(Int, length(res.counts))
-        @inbounds for a in res.assignments
+        # Each point has one label, so sizes come straight from the labels. Drop
+        # clusters below min_points (one can shrink only by losing border points to
+        # a lower-id cluster), renumber the survivors 1..k_local and push their
+        # sizes onto cluster_sizes. label_map is local per V3.
+        group_sizes = zeros(Int, maximum(labels; init = 0))
+        @inbounds for a in labels
             a == 0 && continue
             group_sizes[a] += 1
         end
-        # Compact-relabel within this group: drop clusters whose *final* (post
-        # last-writer-wins) size is below min_points, renumber the survivors
-        # 1..k_local, and push their sizes onto cluster_sizes. This keeps the
-        # labels written to emitter.id contiguous and consistent with the
-        # reported sizes (a cluster can lose all/most of its points to a
-        # neighbor during reassignment). label_map is local per V3.
         label_map, added = _compact_relabel!(cluster_sizes, group_sizes, cfg.min_points)
         @inbounds for (j, i) in pairs(idxs)
-            a = res.assignments[j]
+            a = labels[j]
             smld.emitters[i].id = a == 0 ? 0 : label_map[a]
         end
         n_clustered += added

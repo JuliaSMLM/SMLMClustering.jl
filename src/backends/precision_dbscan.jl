@@ -14,12 +14,11 @@
 #      SMLD-facing path: derives σ_eff from each emitter's localization precision,
 #      builds the graph internally, and writes cluster ids onto `emitter.id`.
 #
-# Unlike the Euclidean `DBSCANConfig` (which wraps `Clustering.dbscan`), the metric
-# here is precision-weighted, so this is a self-contained implementation. The
-# neighbor prepass is threaded (mirrors `local_contrast.jl`); the label pass is
-# deterministic: union-find connected components for `min_points == 0` (order-free,
-# bit-exact regardless of thread scheduling) and a deterministic core-point
-# variant for `min_points ≥ 1`.
+# The Euclidean `DBSCANConfig` runs on the same graph and the same core/border pass
+# (`_core_border_labels!`), with every cached pair active. The neighbor prepass is
+# threaded (mirrors `local_contrast.jl`); the label pass is deterministic: union-find
+# connected components for `min_points == 0` (order-free, bit-exact regardless of
+# thread scheduling) and a deterministic core-point variant for `min_points ≥ 1`.
 
 import Base.Threads: @threads
 
@@ -163,7 +162,8 @@ primitive.
   edge order. Every point is labeled `1..K` (a singleton is its own component; no
   noise).
 - `min_points ≥ 1`: core-point DBSCAN with the classical (self-inclusive) `minPts`,
-  identical to [`DBSCANConfig`](@ref). A point is *core* iff its neighborhood — itself
+  the same core/border pass as [`DBSCANConfig`](@ref) (whose edge test is
+  `d ≤ eps` where this one is strict). A point is *core* iff its neighborhood — itself
   plus its active neighbors — has `≥ min_points` members (i.e. active degree
   `≥ min_points − 1`); core points sharing an active edge merge; a non-core *border*
   point joins the **lowest-id** adjacent core cluster (deterministic tie-break); a
@@ -216,11 +216,11 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
     end
     ns = Float64(nsigma)
     off = g.offsets; nb = g.neighbors; ds = g.dists
-    parent = collect(1:n)
-    sz = ones(Int, n)
 
     if min_points <= 0
         # Connected components over active edges (each undirected edge once, j > i).
+        parent = collect(1:n)
+        sz = ones(Int, n)
         @inbounds for i in 1:n
             σi = Float64(σ_eff[i])
             for t in off[i]:(off[i + 1] - 1)
@@ -232,25 +232,44 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
         return _canonicalize_all!(labels, parent, n)
     end
 
-    # Core points: classical DBSCAN minPts — a point is core iff its neighborhood
-    # (itself + active neighbors) has ≥ min_points members, i.e. active degree ≥
-    # min_points - 1. Matches DBSCANConfig / Clustering.dbscan (self-inclusive count).
+    # Core/border DBSCAN with the classical (self-inclusive) minPts; an edge is active
+    # iff d < nsigma·(σ_i + σ_j).
+    active = (i, t, j) -> @inbounds(ds[t] < ns * (Float64(σ_eff[i]) + Float64(σ_eff[j])))
+    return _core_border_labels!(labels, g, min_points, active)
+end
+
+# Classical core/border DBSCAN (Ester et al. 1996) on a CSR neighbor graph, shared by
+# `precision_dbscan_labels!` and `cluster(::DBSCANConfig)`. `active(i, t, j)` says
+# whether cached edge `t` (from point `i` to point `j`) is in the neighborhood; the
+# Euclidean backend passes `_all_active` (its graph holds exactly the pairs within eps).
+#
+# A point is core iff its neighborhood (itself plus its active neighbors) has
+# ≥ min_points members, i.e. active degree ≥ min_points − 1. Core points sharing an
+# active edge merge (union-find). A non-core point joins the lowest-id core cluster it
+# has an active edge to, and is noise (0) if it has none: a non-core point's own
+# neighbors are never added. Cluster ids are 1..K by ascending first appearance of a
+# core point. Deterministic; requires min_points ≥ 1.
+function _core_border_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph,
+                              min_points::Int, active::F) where {F}
+    n = g.n
+    off = g.offsets; nb = g.neighbors
+    parent = collect(1:n)
+    sz = ones(Int, n)
     core = falses(n)
     @inbounds for i in 1:n
-        σi = Float64(σ_eff[i]); c = 0
+        c = 0
         for t in off[i]:(off[i + 1] - 1)
-            ds[t] < ns * (σi + Float64(σ_eff[nb[t]])) && (c += 1)
+            active(i, t, nb[t]) && (c += 1)
         end
         core[i] = c >= min_points - 1
     end
     # Merge core points connected by an active edge.
     @inbounds for i in 1:n
         core[i] || continue
-        σi = Float64(σ_eff[i])
         for t in off[i]:(off[i + 1] - 1)
             j = nb[t]
             j > i || continue
-            (core[j] && ds[t] < ns * (σi + Float64(σ_eff[j]))) && _uf_union!(parent, sz, i, j)
+            (core[j] && active(i, t, j)) && _uf_union!(parent, sz, i, j)
         end
     end
     # Canonical labels for core components (ascending first-appearance).
@@ -265,10 +284,10 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
     # Border points → lowest-id adjacent active core cluster; else noise (0).
     @inbounds for i in 1:n
         core[i] && continue
-        σi = Float64(σ_eff[i]); best = 0
+        best = 0
         for t in off[i]:(off[i + 1] - 1)
             j = nb[t]
-            (core[j] && ds[t] < ns * (σi + Float64(σ_eff[j]))) || continue
+            (core[j] && active(i, t, j)) || continue
             lj = labels[j]
             (best == 0 || lj < best) && (best = lj)
         end
@@ -276,6 +295,8 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
     end
     return labels
 end
+
+_all_active(i, t, j) = true
 
 # Relabel union-find roots to 1..K by ascending first-appearance (min_points==0).
 function _canonicalize_all!(labels::Vector{Int}, parent::Vector{Int}, n::Int)

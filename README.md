@@ -55,7 +55,8 @@ See the [edge-classification docs](docs/src/methods/edge_classify.md).
 
 ### DBSCAN
 
-Distance-based density clustering via [Clustering.jl](https://github.com/JuliaStats/Clustering.jl).
+Classical distance-based density clustering (Ester et al. 1996): a non-core point joins a
+cluster only if it lies within `eps_nm` of one of the cluster's core points.
 
 ```julia
 cfg = DBSCANConfig(
@@ -332,7 +333,7 @@ Pkg.add(url="https://github.com/JuliaSMLM/SMLMClustering.jl")
 ## Dependencies
 
 - [SMLMData.jl](https://github.com/JuliaSMLM/SMLMData.jl) — emitter types and SMLD container
-- [Clustering.jl](https://github.com/JuliaStats/Clustering.jl) — DBSCAN and hierarchical clustering
+- [Clustering.jl](https://github.com/JuliaStats/Clustering.jl) — hierarchical clustering
 - [Distances.jl](https://github.com/JuliaStats/Distances.jl) — pairwise distance matrix
 - [DelaunayTriangulation.jl](https://github.com/JuliaGeometry/DelaunayTriangulation.jl) — Voronoi tessellation (Voronoi/MRF backends)
 - [AdaptivePredicates.jl](https://github.com/JuliaGeometry/AdaptivePredicates.jl) — exact geometric predicates for EdgeClassify's built-in alpha-shape Delaunay

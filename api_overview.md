@@ -52,8 +52,8 @@ Shared fields expected on every concrete subtype:
 ### `DBSCANConfig <: AbstractClusterConfig`
 
 **Source:** `src/backends/dbscan.jl`
-**Algorithm:** DBSCAN via `Clustering.dbscan`
-**Library:** Clustering.jl
+**Algorithm:** classical DBSCAN (Ester et al. 1996) on the package's neighbor graph, shared with `PrecisionDBSCANConfig`
+**Library:** NearestNeighbors.jl (KD-tree range queries)
 
 **Fields:**
 
