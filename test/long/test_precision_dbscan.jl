@@ -7,7 +7,7 @@ using Clustering        # to cross-check min_points against classical DBSCAN min
 using Test
 using Random
 
-# Reuse the 2D SMLD builder shape from test_dbscan.jl (precision σ_x = σ_y = 0.01 μm).
+# Same 2D SMLD builder shape as `_make_2d_smld` in long/utils/helpers.jl (precision σ_x = σ_y = 0.01 μm).
 function _make_prec_smld(points::Vector{Tuple{Float64,Float64,Int}};
                          σ::Float64 = 0.01,
                          n_datasets::Int = maximum(p[3] for p in points))

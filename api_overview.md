@@ -67,7 +67,7 @@ Shared fields expected on every concrete subtype:
 
 **Validation:** `eps_nm > 0`, `min_points >= 1`.
 
-**Scalability:** O(n log n) with a KD-tree; suitable for large datasets.
+**Scalability:** KD-tree range queries, O(n) memory; time grows with the number of pairs within eps. Suitable for large datasets.
 
 **Supports 3D:** yes.
 

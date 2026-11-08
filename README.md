@@ -337,4 +337,4 @@ Pkg.add(url="https://github.com/JuliaSMLM/SMLMClustering.jl")
 - [Distances.jl](https://github.com/JuliaStats/Distances.jl) — pairwise distance matrix
 - [DelaunayTriangulation.jl](https://github.com/JuliaGeometry/DelaunayTriangulation.jl) — Voronoi tessellation (Voronoi/MRF backends)
 - [AdaptivePredicates.jl](https://github.com/JuliaGeometry/AdaptivePredicates.jl) — exact geometric predicates for EdgeClassify's built-in alpha-shape Delaunay
-- [NearestNeighbors.jl](https://github.com/KristofferC/NearestNeighbors.jl) — KDTree NN queries (Hopkins backend)
+- [NearestNeighbors.jl](https://github.com/KristofferC/NearestNeighbors.jl) — KD-tree neighbor queries (most backends and EdgeClassify)

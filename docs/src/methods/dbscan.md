@@ -74,10 +74,10 @@ Emitter coordinates on `AbstractEmitter` subtypes are stored in **microns**, but
 
 Clustering is then performed directly on the micron coordinate matrix, so the
 neighborhood test is the Euclidean distance $\le \varepsilon_{\mu m}$ in micron
-space. Neighbor queries use a KD-tree (threaded range queries), which is what gives
-the backend its sub-quadratic scaling. The pairs within ε are stored once as a
-compressed neighbor list; core points are counted from it, core points within ε of
-each other are merged with union-find, and border points are then attached.
+space. Neighbor queries use a KD-tree, which is what gives the backend its
+sub-quadratic scaling. Three passes run over the tree and store no neighbor list:
+core points are counted (threaded), core points within ε of each other are merged
+with union-find, and border points are then attached (threaded).
 
 ### 2D vs 3D
 
@@ -158,10 +158,10 @@ count.
 
 ## Notes & caveats
 
-- **Scaling.** Neighbor queries run on a KD-tree, so there is no O(n²)
-  pairwise-distance matrix. Memory grows with the number of pairs within ε (the
-  stored neighbor list), not with n². This is the reason DBSCAN is preferred over
-  the hierarchical backend for groups with many thousands of localizations.
+- **Scaling.** Neighbor queries run on a KD-tree and no neighbor list is kept, so
+  memory is O(n) at any ε. Time grows with the number of pairs within ε (each
+  point's range query is read three times). This is the reason DBSCAN is preferred
+  over the hierarchical backend for groups with many thousands of localizations.
 - **`min_points` semantics.** The same value sets both the core-point threshold
   and the minimum cluster size: a cluster whose final membership is below
   `min_points` is dropped (its points become noise). That can happen only when a

@@ -5,11 +5,12 @@
 # writes per-emitter cluster labels into `emitter.id` (0 = noise, 1..K = cluster)
 # and returns `(smld_out, ClusterInfo)`.
 #
-# Runs on the package's own neighbor graph (`build_precision_neighbor_graph`, every
-# pair with d ≤ eps) and core/border pass (`_core_border_labels!`), shared with
-# PrecisionDBSCANConfig. It does not wrap `Clustering.dbscan`: Clustering.jl 0.15
-# adds the neighbors of every explored point to the cluster before testing whether
-# that point is core, so a cluster reached up to 2·eps past its last core point.
+# `_dbscan_labels` is the package's own implementation: three passes over one KD-tree
+# with O(n) memory (no neighbor list is stored), the same core/border rule as
+# PrecisionDBSCANConfig's `precision_dbscan_labels`. It does not wrap
+# `Clustering.dbscan`: Clustering.jl 0.15 adds the neighbors of every explored point
+# to the cluster before testing whether that point is core, so a cluster reached up
+# to 2·eps past its last core point.
 #
 # Shared helpers (_coords_matrix, _group_by_dataset, etc.) are provided by utils.jl,
 # which is included before the backend files.
@@ -83,10 +84,7 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
 
         sub = view(smld.emitters, idxs)
         X = _coords_matrix(sub, cfg.use_3d)
-        # Every pair with d ≤ eps (KDTree inrange, inclusive), all of them active.
-        g = build_precision_neighbor_graph(X, radius_μm)
-        labels = Vector{Int}(undef, g.n)
-        _core_border_labels!(labels, g, cfg.min_points, _all_active)
+        labels = _dbscan_labels(X, radius_μm, cfg.min_points)
 
         # Each point has one label, so sizes come straight from the labels. Drop
         # clusters below min_points (one can shrink only by losing border points to
@@ -119,4 +117,50 @@ function cluster(smld::SMLMData.BasicSMLD, cfg::DBSCANConfig)
         (time_ns() - t0) / 1e9,
     )
     return smld_out, info
+end
+
+# Classical DBSCAN labels for a D×n coordinate matrix X (μm) with radius r (μm):
+# neighborhoods are d ≤ r (KD-tree `inrange`, inclusive) and include the point itself.
+# Three passes over one tree, O(n) memory (each range query is consumed and dropped):
+#   1. core[i] = |N(i)| ≥ min_points                       (threaded, one entry per i)
+#   2. union-find over core points within r of each other  (serial)
+#   3. ids 1..K by first core point; each non-core point takes the lowest id among
+#      the core points within r, else 0                    (threaded, reads core ids only)
+# A non-core point's own neighbors are never added. Deterministic for a given order.
+function _dbscan_labels(X::Matrix{Float64}, r::Float64, min_points::Int)
+    n = size(X, 2)
+    labels = zeros(Int, n)
+    n == 0 && return labels
+    tree = NearestNeighbors.KDTree(X)
+    core = Vector{Bool}(undef, n)      # Vector{Bool}, not BitVector: written from threads
+    Threads.@threads for i in 1:n
+        core[i] = length(NearestNeighbors.inrange(tree, view(X, :, i), r)) >= min_points
+    end
+    parent = collect(1:n)
+    sz = ones(Int, n)
+    for i in 1:n
+        core[i] || continue
+        for j in NearestNeighbors.inrange(tree, view(X, :, i), r)
+            (j > i && core[j]) && _uf_union!(parent, sz, i, j)
+        end
+    end
+    rootlabel = zeros(Int, n)
+    nextlab = 0
+    for i in 1:n
+        core[i] || continue
+        rt = _uf_find(parent, i)
+        rootlabel[rt] == 0 && (nextlab += 1; rootlabel[rt] = nextlab)
+        labels[i] = rootlabel[rt]
+    end
+    Threads.@threads for i in 1:n
+        core[i] && continue
+        best = 0
+        for j in NearestNeighbors.inrange(tree, view(X, :, i), r)
+            core[j] || continue
+            lj = labels[j]
+            (best == 0 || lj < best) && (best = lj)
+        end
+        labels[i] = best
+    end
+    return labels
 end
