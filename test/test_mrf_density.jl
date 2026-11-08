@@ -153,6 +153,35 @@ using Statistics
         @test labels_soft == [2, 2, 2]
     end
 
+    @testset "Bayes boundary: weighted densities equal at the threshold" begin
+        lwn(x, m, v, w) = log(w) - 0.5 * log(2π * v) - (x - m)^2 / (2v)
+        bnd = SMLMClustering._gaussian_decision_boundary
+        # Hand case: means 0 and 3, variances 1 and 0.25, equal weights. The root of
+        # -3x² + 24x - 36 + log 4 = 0 in [0, 3] is 1.8877 (the old sign gave 2.119).
+        t = bnd(0.0, 1.0, 0.5, 3.0, 0.25, 0.5)
+        @test t ≈ (24 - sqrt(576 - 12 * (36 - log(4)))) / 6 atol = 1e-12
+        @test lwn(t, 0.0, 1.0, 0.5) ≈ lwn(t, 3.0, 0.25, 0.5) atol = 1e-10
+        # Swapped variances mirror it about 1.5.
+        @test bnd(0.0, 0.25, 0.5, 3.0, 1.0, 0.5) ≈ 3.0 - t atol = 1e-12
+        # Random two-component fits: wherever the weighted densities cross between
+        # the means, the returned threshold is that crossing (posterior 0.5).
+        rng = Xoshiro(11)
+        errs = Float64[]; in_range = Bool[]
+        for _ in 1:500
+            m1 = 4 * rand(rng); m2 = m1 + 0.5 + 3 * rand(rng)
+            v1 = 0.05 + 2 * rand(rng); v2 = 0.05 + 2 * rand(rng)
+            w1 = 0.1 + 0.8 * rand(rng); w2 = 1 - w1
+            f = x -> lwn(x, m1, v1, w1) - lwn(x, m2, v2, w2)
+            f(m1) > 0 && f(m2) < 0 || continue             # one crossing lies in [m1, m2]
+            x = bnd(m1, v1, w1, m2, v2, w2)
+            push!(in_range, m1 <= x <= m2)
+            push!(errs, abs(f(x)))
+        end
+        @test length(errs) > 300
+        @test all(in_range)
+        @test maximum(errs) < 1e-8
+    end
+
     @testset "calibrate_regime_thresholds: argument validation" begin
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1),
                               (1.0, 1.0, 1), (0.5, 0.5, 1)])

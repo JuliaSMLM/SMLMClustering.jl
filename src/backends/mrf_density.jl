@@ -269,8 +269,9 @@ end
 
 # ----------------------------------------------------------------------------
 # Bayes decision boundary between two 1D Gaussians with weights, where
-# log(w1) + log N(x|μ1, σ1²) = log(w2) + log N(x|μ2, σ2²). Reduces to a
-# quadratic A x² + B x + C = 0; pick the root in [μ1, μ2] (the natural
+# log(w1) + log N(x|μ1, σ1²) = log(w2) + log N(x|μ2, σ2²). Multiplying both sides
+# by −2 gives the quadratic A x² + B x + C = 0 below (the Gaussian normalizers
+# contribute +log σ1² − log σ2² to C); pick the root in [μ1, μ2] (the natural
 # inter-mode boundary). Falls back to the midpoint when the discriminant is
 # negative (one component dominates everywhere) or when the in-range root
 # selection is ambiguous.
@@ -280,7 +281,7 @@ function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
     # Equal variances → linear: solution is unique and analytic.
     A = 1.0 / σ²1 - 1.0 / σ²2
     B = -2.0 * (μ1 / σ²1 - μ2 / σ²2)
-    C = μ1^2 / σ²1 - μ2^2 / σ²2 + log(σ²2 / σ²1) - 2 * log(w1 / w2)
+    C = μ1^2 / σ²1 - μ2^2 / σ²2 + log(σ²1 / σ²2) - 2 * log(w1 / w2)
     if abs(A) < 1e-12
         return abs(B) > 1e-12 ? -C / B : (μ1 + μ2) / 2
     end
