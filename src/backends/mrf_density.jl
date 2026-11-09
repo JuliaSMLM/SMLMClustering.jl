@@ -306,38 +306,47 @@ function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
 end
 
 # ----------------------------------------------------------------------------
-# Hard-regime thresholds from a mean-sorted Gaussian fit: the Bayes boundary
-# between consecutive components, along the upper envelope of the weighted
-# densities. A component whose boundary with its lower neighbor is not below
-# its boundary with its upper neighbor never has the highest weighted density
-# between them; it is dropped, the boundary between its two neighbors is used,
-# and its regime is empty (equal consecutive thresholds). A pair that never
-# crosses has boundary −Inf or +Inf, so the component that never wins drops out
-# by the same test; a first or last component that never wins keeps an empty
-# regime through a −Inf or +Inf threshold. With equal variances this is exactly
-# the Bayes classifier.
+# Hard-regime thresholds from a mean-sorted Gaussian fit. A component whose
+# weighted density is below another component's everywhere (pairwise boundary
+# +Inf with a lower one, −Inf with an upper one) never wins and gets no regime.
+# The others are walked along the upper envelope: the Bayes boundary between
+# consecutive survivors. A survivor whose boundary with its lower neighbor is not
+# below its boundary with its upper neighbor never has the highest weighted
+# density between them; it is dropped, the boundary between its two neighbors is
+# used, and its regime is empty (equal consecutive thresholds). Empty regimes at
+# either end give −Inf or +Inf thresholds. Hard regimes are intervals in mean
+# order, so a broad component that wins again far out in a tail does not get
+# that tail. With equal variances this is exactly the Bayes classifier.
 # ----------------------------------------------------------------------------
 function _regime_thresholds(fit)
     μ, σ², w = fit.means, fit.vars, fit.weights
     K = length(μ)
-    kept = [1]            # surviving components, in mean order
+    b(i, j) = _gaussian_decision_boundary(μ[i], σ²[i], w[i], μ[j], σ²[j], w[j])
+    # Dominance is antisymmetric and transitive, so some component survives; the
+    # guard covers rounding at a near-tangent pair.
+    alive = [all(i -> b(i, j) != Inf, 1:(j - 1)) && all(k -> b(j, k) != -Inf, (j + 1):K)
+             for j in 1:K]
+    any(alive) || fill!(alive, true)
+    kept = Int[]          # surviving components, in mean order
     bnd = Float64[]       # bnd[a] = boundary between kept[a] and kept[a+1]
-    for j in 2:K
-        while true
-            i = kept[end]
-            b = _gaussian_decision_boundary(μ[i], σ²[i], w[i], μ[j], σ²[j], w[j])
-            if !isempty(bnd) && b <= bnd[end]
-                pop!(kept); pop!(bnd)          # component i never wins: drop it
+    for j in findall(alive)
+        while !isempty(kept)
+            bj = b(kept[end], j)
+            if !isempty(bnd) && bj <= bnd[end]
+                pop!(kept); pop!(bnd)          # kept[end] never wins: drop it
             else
-                push!(kept, j); push!(bnd, b)
+                push!(bnd, bj)
                 break
             end
         end
+        push!(kept, j)
     end
     thresholds = Vector{Float64}(undef, K - 1)
+    thresholds[1:(kept[1] - 1)] .= -Inf
     for a in 1:(length(kept) - 1)
         thresholds[kept[a]:(kept[a + 1] - 1)] .= bnd[a]
     end
+    thresholds[kept[end]:(K - 1)] .= Inf
     return thresholds
 end
 
@@ -471,11 +480,14 @@ Each threshold is the analytic Bayes decision boundary between consecutive
 GMM components (sorted ascending by mean), accounting for unequal variances
 and weights: the log-density at which the upper component's weighted density
 overtakes the lower one's. That point can lie outside the two means (a light
-component may win only beyond its own mean). A component that never has the
-highest weighted density between its neighbors gets an empty regime: its two
-thresholds are equal, at the boundary between its neighbors. When two
-components' weighted densities never cross, the one that never wins gets no
-regime; for the first or last component that threshold is `-Inf` or `Inf`.
+component may win only beyond its own mean). A component whose weighted
+density is below another component's everywhere gets no regime, and one that
+never has the highest weighted density between its neighbors gets an empty
+regime: its two thresholds are equal, at the boundary between its neighbors.
+An empty first or last regime makes a threshold `-Inf` or `Inf`. Regimes are
+intervals in mean order, so with unequal variances a broad component that has
+the highest weighted density again far out in a tail does not get that tail.
+With equal variances the thresholds are exactly the Bayes classifier.
 
 # Returns
 `Vector{Float64}` of length `n_regimes - 1`, sorted ascending; an end regime

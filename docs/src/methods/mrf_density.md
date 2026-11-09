@@ -180,10 +180,13 @@ density_estimator=:knn, density_k=20)` is a thin wrapper that returns instead a
 `regime_thresholds`: the analytic Bayes decision boundaries between consecutive
 components, i.e. the log-density at which the upper component's weighted density
 overtakes the lower one's. That point can lie outside the two means. A component
-that never has the highest weighted density between its neighbors gets an empty
-regime (two equal thresholds, at its neighbors' boundary). When two components'
-weighted densities never cross, the one that never wins gets no regime; for the
-first or last component the threshold is then `-Inf` or `Inf`.
+whose weighted density is below another component's everywhere gets no regime, and
+one that never has the highest weighted density between its neighbors gets an
+empty regime (two equal thresholds, at its neighbors' boundary). An empty first or
+last regime makes a threshold `-Inf` or `Inf`. Regimes are intervals in mean
+order, so with unequal variances a broad component that wins again far out in a
+tail does not get that tail. With equal variances the thresholds are exactly the
+Bayes classifier.
 
 Before 0.4.4 a sign error moved every threshold off the boundary (0.2–11.7% of
 localizations in the wrong hard regime on four of the lab's dSTORM cells at

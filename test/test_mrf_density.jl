@@ -295,6 +295,42 @@ include(joinpath(@__DIR__, "long", "utils", "helpers.jl"))
         t = thr((means = [-1.0, 0.0, 3.0], vars = [0.01, 1.0, 1.0], weights = [0.001, 0.5, 0.499]))
         @test t[1] == -Inf
         @test t[2] ≈ bnd(0.0, 1.0, 0.5, 3.0, 1.0, 0.499) atol = 1e-12
+        # Dominated by a component that is not its neighbor: the broad first component is
+        # above the narrow, light third one everywhere (pair boundary +Inf), so component 3
+        # gets no regime, though it overtakes component 2 at 2.47. Mirrored: component 1.
+        @test bnd(0.0, 1.0, 0.5, 2.0, 0.25, 0.01) == Inf
+        t = thr((means = [0.0, 1.0, 2.0], vars = [1.0, 0.25, 0.25], weights = [0.5, 0.49, 0.01]))
+        @test t[1] ≈ bnd(0.0, 1.0, 0.5, 1.0, 0.25, 0.49) atol = 1e-12
+        @test t[2] == Inf
+        t = thr((means = [0.0, 1.0, 2.0], vars = [0.25, 0.25, 1.0], weights = [0.01, 0.49, 0.5]))
+        @test t[1] == -Inf
+        @test t[2] ≈ bnd(1.0, 0.25, 0.49, 2.0, 1.0, 0.5) atol = 1e-12
+        # Unequal variances: every component that some other component is above everywhere
+        # gets an empty regime, and the thresholds stay sorted. Oracle: lwn_j - lwn_k is the
+        # quadratic a x² + b x + c below; j is above k everywhere iff a > 0 and b² < 4ac.
+        function above_everywhere(j, k, m, v, w)
+            a = 1 / (2v[k]) - 1 / (2v[j])
+            b = m[j] / v[j] - m[k] / v[k]
+            c = log(w[j] / w[k]) - log(v[j] / v[k]) / 2 - m[j]^2 / (2v[j]) + m[k]^2 / (2v[k])
+            return a > 0 && b^2 < 4a * c
+        end
+        rng = Xoshiro(15)
+        ok = Bool[]; n_dom = 0
+        for _ in 1:500
+            K = rand(rng, 2:5)
+            m = sort(4 * rand(rng, K)); v = 0.05 .+ 2 * rand(rng, K)
+            w = 0.005 .+ rand(rng, K); w ./= sum(w)
+            t = thr((means = m, vars = v, weights = w))
+            te = [-Inf; t; Inf]                    # regime k is [te[k], te[k+1])
+            for k in 1:K
+                dominated = any(j -> j != k && above_everywhere(j, k, m, v, w), 1:K)
+                n_dom += dominated
+                dominated && push!(ok, te[k] == te[k + 1])
+            end
+            push!(ok, issorted(t))
+        end
+        @test n_dom > 50
+        @test all(ok)
         # Equal variances with tied means: the thresholds still reproduce the Bayes
         # classifier argmax_k w_k N_k (bins as in _unary_from_thresholds).
         rng = Xoshiro(14)
