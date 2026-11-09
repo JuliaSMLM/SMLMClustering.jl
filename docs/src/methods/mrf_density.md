@@ -184,8 +184,8 @@ Every non-empty regime contains points where its component has the highest
 weighted density among the components the rules keep. A component the rules
 remove gets an empty regime; for the first or last regime that makes a threshold
 `-Inf` or `Inf`. With equal variances the thresholds are exactly the Bayes
-classifier. The rules are stated once, in the [`calibrate_regime_thresholds`](@ref)
-docstring.
+classifier; with unequal variances they are an interval approximation to it. The
+rules are stated once, in the [`calibrate_regime_thresholds`](@ref) docstring.
 
 Before 0.4.4 a sign error in the log-variance term moved every threshold off the
 Bayes boundary whenever the two variances differed, so localizations near it fell

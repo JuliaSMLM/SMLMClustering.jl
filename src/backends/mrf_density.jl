@@ -555,16 +555,18 @@ each regime is one interval of log-density, in that order.
    dropped, and the boundary between its two neighbors is used.
 3. A kept component that never has the highest weighted density on a stretch
    of its own interval, compared with every component not removed, is removed,
-   and the walk is rerun. Ties count as highest; touching the top at a single
-   point does not.
+   and the walk is rerun. One component is removed per pass, the one with the
+   lowest mean first. A component is tested only inside the interval the walk
+   gives it. Ties count as highest; touching the top at a single point does not.
 
 So every non-empty regime contains a stretch where its component has the
 highest weighted density among the components not removed. A removed or dropped
 component gets an empty regime: two equal thresholds, or, for the first or last
 regime, a threshold of `-Inf` or `Inf`. With unequal variances a component can
-have the highest weighted density on two separate ranges; an interval regime
-holds only one of them, and the other goes to a neighboring regime. With equal
-variances the thresholds are exactly the Bayes classifier.
+have the highest weighted density on two separate ranges. It keeps at most one
+of them, possibly none, and the rest goes to neighboring regimes. With unequal
+variances the thresholds are therefore an interval approximation to the Bayes
+rule; with equal variances they are exactly the Bayes classifier.
 
 # Returns
 `Vector{Float64}` of length `n_regimes - 1`, sorted ascending; an end regime
