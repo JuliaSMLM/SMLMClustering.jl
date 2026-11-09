@@ -353,17 +353,35 @@ include(joinpath(@__DIR__, "long", "utils", "helpers.jl"))
     @testset "regime thresholds: every non-empty regime holds points its component wins" begin
         lwn(x, m, v, w) = log(w) - 0.5 * log(2π * v) - (x - m)^2 / (2v)
         thr = SMLMClustering._regime_thresholds
-        # Brute force on a fine grid: each non-empty regime [t_{k-1}, t_k) holds a point
-        # where component k has the highest weighted density of all the components.
+        # Brute force: each non-empty regime [t_{k-1}, t_k) holds a point where component k
+        # has the highest weighted density of all the components (ties count). The points
+        # are a fine grid plus one probe inside every regime, so a regime that lies off the
+        # grid is still checked.
         function wins_in_own_regime(m, v, w, t)
             K = length(m); te = [-Inf; t; Inf]
-            xs = range(minimum(m .- 12 .* sqrt.(v)), maximum(m .+ 12 .* sqrt.(v)); length = 20001)
-            best = map(x -> argmax(j -> lwn(x, m[j], v[j], w[j]), 1:K), xs)
+            top(x) = maximum(j -> lwn(x, m[j], v[j], w[j]), 1:K)
+            grid = collect(range(minimum(m .- 12 .* sqrt.(v)), maximum(m .+ 12 .* sqrt.(v)); length = 20001))
+            gtop = map(top, grid)
             return all(1:K) do k
-                inside = findall(x -> te[k] <= x < te[k + 1], xs)
-                isempty(inside) || any(i -> best[i] == k, inside)
+                a, b = te[k], te[k + 1]
+                a < b || return true                                   # empty regime
+                probe = isfinite(a) && isfinite(b) ? (a + b) / 2 :
+                        isfinite(a) ? a + 1 + abs(a) : isfinite(b) ? b - 1 - abs(b) : 0.0
+                any(i -> a <= grid[i] < b && lwn(grid[i], m[k], v[k], w[k]) >= gtop[i], eachindex(grid)) ||
+                    lwn(probe, m[k], v[k], w[k]) >= top(probe)
             end
         end
+        # The oracle itself: a regime entirely off the grid is still checked (component 1 is
+        # below component 2 everywhere, so a cut at -100 must fail), and a tie between
+        # identical components counts as winning.
+        mT, vT, wT = [0.0, 1.0], [0.01, 1.0], [0.001, 0.999]
+        @test !wins_in_own_regime(mT, vT, wT, [-100.0])
+        @test thr((means = mT, vars = vT, weights = wT)) == [-Inf]
+        fI = (means = [1.0, 1.0], vars = [1.0, 1.0], weights = [0.5, 0.5])
+        @test wins_in_own_regime(fI.means, fI.vars, fI.weights, thr(fI))
+        # Touching the top at a single point is not winning: the narrow component equals
+        # the broad one only at 0 and is below it everywhere else, so it gets no regime.
+        @test thr((means = [0.0, 0.0], vars = [1.0, 4.0], weights = [1.0, 2.0])) == [-Inf]
         # 4 regimes, unequal variances: the neighbor-only walk gave component 3 the range
         # [-0.83, -0.21), where component 1 is highest everywhere; now its regime is empty.
         w4 = [0.342, 0.254, 0.099, 0.304]; w4 ./= sum(w4)

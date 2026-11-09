@@ -326,9 +326,10 @@ function _gaussian_crossings(μ1::Float64, σ²1::Float64, w1::Float64,
 end
 
 # Whether component k has the highest weighted density among the components S
-# (ties allowed) somewhere in (lo, hi). Between consecutive pairwise crossings
-# the order of the weighted densities is fixed, so testing one point per piece
-# is exact.
+# (ties allowed) on some stretch of positive width in (lo, hi); touching the top
+# at a single point does not count. Between consecutive pairwise crossings the
+# order of the weighted densities is fixed, so testing one point per piece is
+# exact for that.
 function _wins_in(k::Int, lo::Float64, hi::Float64, S::Vector{Int}, μ, σ², w)
     lwd(j, x) = log(w[j]) - log(σ²[j]) / 2 - (x - μ[j])^2 / (2σ²[j])
     cuts = Float64[]
@@ -379,9 +380,9 @@ end
 #    boundary +Inf with a lower one, −Inf with an upper one) is removed.
 # 2. The rest are walked along the upper envelope (_envelope_walk).
 # 3. A kept component that never has the highest weighted density, among the
-#    components not removed, inside its own interval is removed and the walk
-#    reruns, until none is removed (at most K passes; a lone component always
-#    passes).
+#    components not removed, on a stretch of its own interval (_wins_in) is
+#    removed and the walk reruns, until none is removed (at most K passes; a
+#    lone component always passes).
 # Removed components get empty regimes; at either end through −Inf or +Inf.
 # ----------------------------------------------------------------------------
 function _regime_thresholds(fit)
@@ -552,12 +553,13 @@ each regime is one interval of log-density, in that order.
    component may win only beyond its own mean). A component whose boundary with
    its lower neighbor is not below its boundary with its upper neighbor is
    dropped, and the boundary between its two neighbors is used.
-3. A kept component that never has the highest weighted density inside its own
-   interval, compared with every component not removed, is removed, and the
-   walk is rerun.
+3. A kept component that never has the highest weighted density on a stretch
+   of its own interval, compared with every component not removed, is removed,
+   and the walk is rerun. Ties count as highest; touching the top at a single
+   point does not.
 
-So every non-empty regime contains points where its component has the highest
-weighted density among the components not removed. A removed or dropped
+So every non-empty regime contains a stretch where its component has the
+highest weighted density among the components not removed. A removed or dropped
 component gets an empty regime: two equal thresholds, or, for the first or last
 regime, a threshold of `-Inf` or `Inf`. With unequal variances a component can
 have the highest weighted density on two separate ranges; an interval regime
