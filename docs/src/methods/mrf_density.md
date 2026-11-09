@@ -188,12 +188,12 @@ order, so with unequal variances a broad component that wins again far out in a
 tail does not get that tail. With equal variances the thresholds are exactly the
 Bayes classifier.
 
-Before 0.4.4 a sign error moved every threshold off the boundary (0.2–11.7% of
-localizations in the wrong hard regime on four of the lab's dSTORM cells at
-`n_regimes = 2`), and a boundary outside the two means was replaced by their
-midpoint. Measured against the fitted mixture's most probable component, on the
-same four cells that put 10.6–26.8% of localizations in another regime in the 10
-fits it changed at 3–4 regimes (0.6–5.3% now).
+Before 0.4.4 a sign error in the log-variance term moved every threshold off the
+Bayes boundary whenever the two variances differed, so localizations near it fell
+in the wrong hard regime. A boundary outside the two means, and a pair of components
+that never cross, were given the midpoint of the means instead; at 3 or more
+regimes that could leave the thresholds unsorted or give a regime to a component
+that never wins.
 
 ## Output & interpretation
 

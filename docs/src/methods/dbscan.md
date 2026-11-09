@@ -179,9 +179,9 @@ count.
   0.15), which adds the neighbors of a border point to the cluster as well, so a
   cluster could reach up to 2ε past its last core point. That happens only with
   `min_points ≥ 4` (with 2 or 3, a border point's only neighbor is the core point
-  that reached it). On four of the lab's dSTORM cells (BaGoL MAP-N positions) at
-  `min_points = 5`, 3–10% of the localizations it clustered were noise under the
-  classical definition.
+  that reached it). Localizations within ε of no core point, which classical DBSCAN
+  calls noise, were then counted as cluster members, so clusters came out larger
+  and wider than classical DBSCAN's.
 - **2D vs 3D.** Both are supported. 3D needs emitters that carry a `z` field;
   otherwise an error is raised.
 - **Per-dataset grouping.** With `per_dataset = true`, datasets are processed in
