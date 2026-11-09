@@ -3,8 +3,8 @@
 DBSCAN (Density-Based Spatial Clustering of Applications with Noise) labels each
 SMLM localization as belonging to a cluster or as noise based on local point
 density. It is a `cluster` labeling backend selected by passing a `DBSCANConfig`,
-and implements classical DBSCAN (Ester et al. 1996) on the package's own neighbor
-graph, the same core/border pass that [Precision DBSCAN](@ref) uses. The call
+and implements classical DBSCAN (Ester et al. 1996) with KD-tree range queries,
+with the same core and border rules as [Precision DBSCAN](@ref). The call
 `cluster(smld, cfg::DBSCANConfig)` deep-copies the input emitters, writes a
 per-emitter label into `emitter.id` (`0` = noise, `1..K` = cluster), and returns
 `(smld_out, ClusterInfo)`.

@@ -257,6 +257,63 @@ include(joinpath(@__DIR__, "long", "utils", "helpers.jl"))
         @test all(sorted)
     end
 
+    @testset "regime thresholds: no crossing, one component wins everywhere" begin
+        lwn(x, m, v, w) = log(w) - 0.5 * log(2π * v) - (x - m)^2 / (2v)
+        bnd = SMLMClustering._gaussian_decision_boundary
+        thr = SMLMClustering._regime_thresholds
+        # The threshold is where the upper regime starts: -Inf when the upper component
+        # wins everywhere, +Inf when it never does. Same mean and variance: the heavier wins
+        # everywhere; identical components: no preference, any split (the shared mean).
+        @test bnd(1.0, 1.0, 0.3, 1.0, 1.0, 0.7) == -Inf
+        @test bnd(1.0, 1.0, 0.7, 1.0, 1.0, 0.3) == Inf
+        @test bnd(1.0, 1.0, 0.5, 1.0, 1.0, 0.5) == 1.0
+        # Unequal variances, no crossing: a narrow, light component under a broad one.
+        f = x -> lwn(x, 0.0, 1.0, 0.999) - lwn(x, 1.0, 0.01, 0.001)
+        @test all(x -> f(x) > 0, range(-50, 50; length = 10001))
+        @test bnd(0.0, 1.0, 0.999, 1.0, 0.01, 0.001) == Inf
+        @test bnd(-1.0, 0.01, 0.001, 0.0, 1.0, 0.999) == -Inf
+        # Nearly equal variances (A ≈ 1e-13, not zero): the densities cross far out, and
+        # the threshold is that crossing, not the midpoint. The inputs are ill-conditioned
+        # (A loses digits in Float64), hence the loose tolerance against a BigFloat root.
+        p = (0.0, 1.0, 0.9, 1e-14, 1 + 1e-13, 0.1)
+        A = 1 / big(p[2]) - 1 / big(p[5])
+        B = -2 * (big(p[1]) / p[2] - big(p[4]) / p[5])
+        C = big(p[1])^2 / p[2] - big(p[4])^2 / p[5] + log(big(p[2]) / p[5]) - 2 * log(big(p[3]) / p[6])
+        @test bnd(p...) ≈ Float64((-B + sqrt(B^2 - 4A * C)) / (2A)) rtol = 1e-2
+        @test bnd(p...) > 1e6
+        # A narrow, light middle component under two broad ones never wins: its regime is
+        # empty and both thresholds are the 1|3 boundary, 1.0 (not the midpoints 0.5, 1.5).
+        @test thr((means = [0.0, 1.0, 2.0], vars = [1.0, 0.01, 1.0],
+                   weights = [0.4995, 0.001, 0.4995])) ≈ [1.0, 1.0] atol = 1e-12
+        # Same mean and variance as its lower neighbor, lighter: component 3 never wins.
+        t = thr((means = [0.0, 1.0, 1.0, 3.0], vars = ones(4), weights = [0.1, 0.6, 0.2, 0.1]))
+        @test t[1] ≈ bnd(0.0, 1.0, 0.1, 1.0, 1.0, 0.6) atol = 1e-12
+        @test t[2] == t[3]
+        @test t[2] ≈ bnd(1.0, 1.0, 0.6, 3.0, 1.0, 0.1) atol = 1e-12
+        # An end component that never wins: its regime is empty through an infinite threshold.
+        @test thr((means = [0.0, 1.0], vars = [1.0, 0.01], weights = [0.999, 0.001])) == [Inf]
+        t = thr((means = [-1.0, 0.0, 3.0], vars = [0.01, 1.0, 1.0], weights = [0.001, 0.5, 0.499]))
+        @test t[1] == -Inf
+        @test t[2] ≈ bnd(0.0, 1.0, 0.5, 3.0, 1.0, 0.499) atol = 1e-12
+        # Equal variances with tied means: the thresholds still reproduce the Bayes
+        # classifier argmax_k w_k N_k (bins as in _unary_from_thresholds).
+        rng = Xoshiro(14)
+        agree = Bool[]; n_tied = 0
+        for _ in 1:300
+            K = rand(rng, 2:5)
+            m = sort(Float64.(rand(rng, 0:3, K))); v = fill(0.1 + rand(rng), K)
+            w = 0.02 .+ rand(rng, K); w ./= sum(w)
+            n_tied += !allunique(m)
+            t = thr((means = m, vars = v, weights = w))
+            for x in range(m[1] - 3, m[end] + 3; length = 401)
+                bayes = argmax([lwn(x, m[k], v[k], w[k]) for k in 1:K])
+                push!(agree, 1 + count(<=(x), t) == bayes)
+            end
+        end
+        @test n_tied > 100
+        @test all(agree)
+    end
+
     @testset "calibrate_regime_thresholds: argument validation" begin
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1),
                               (1.0, 1.0, 1), (0.5, 0.5, 1)])

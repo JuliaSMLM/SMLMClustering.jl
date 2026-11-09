@@ -181,8 +181,9 @@ density_estimator=:knn, density_k=20)` is a thin wrapper that returns instead a
 components, i.e. the log-density at which the upper component's weighted density
 overtakes the lower one's. That point can lie outside the two means. A component
 that never has the highest weighted density between its neighbors gets an empty
-regime (two equal thresholds, at its neighbors' boundary). The midpoint between
-the means is used only when the two weighted densities never cross.
+regime (two equal thresholds, at its neighbors' boundary). When two components'
+weighted densities never cross, the one that never wins gets no regime; for the
+first or last component the threshold is then `-Inf` or `Inf`.
 
 Before 0.4.4 a sign error moved every threshold off the boundary (0.2–11.7% of
 localizations in the wrong hard regime on four of the lab's dSTORM cells at

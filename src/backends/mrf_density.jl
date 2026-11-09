@@ -278,21 +278,26 @@ end
 # across [μ1, μ2]: the boundary is the root where g rises, (−B + √Δ)/(2A),
 # whether or not it lies between the means. (When both means fall on the same
 # side of it, the lighter component wins only beyond its own mean; that is still
-# where the hard regime changes.) Falls back to the midpoint only when the
-# discriminant is negative: no crossing, one component dominates everywhere.
+# where the hard regime changes.) When the weighted densities never cross, one
+# component wins everywhere and the boundary is where the upper regime starts:
+# −Inf if the upper component wins everywhere, +Inf if it never does. Only two
+# identical weighted components (no preference anywhere) give the shared mean.
 # ----------------------------------------------------------------------------
 function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
                                       μ2::Float64, σ²2::Float64, w2::Float64)
-    # Equal variances → linear: solution is unique and analytic.
     A = 1.0 / σ²1 - 1.0 / σ²2
     B = -2.0 * (μ1 / σ²1 - μ2 / σ²2)
     C = μ1^2 / σ²1 - μ2^2 / σ²2 + log(σ²1 / σ²2) - 2 * log(w1 / w2)
-    if abs(A) < 1e-12
-        return abs(B) > 1e-12 ? -C / B : (μ1 + μ2) / 2
+    if A == 0
+        # Equal variances: 2g = Bx + C, rising for μ1 < μ2. With equal means too,
+        # 2g = C everywhere: the heavier component wins everywhere.
+        B != 0 && return -C / B
+        return C > 0 ? -Inf : C < 0 ? Inf : (μ1 + μ2) / 2
     end
     Δ = B^2 - 4.0 * A * C
-    if Δ < 0
-        return (μ1 + μ2) / 2
+    if Δ <= 0
+        # No sign change: 2g has the sign of A everywhere (A > 0: upper wins).
+        return A > 0 ? -Inf : Inf
     end
     s = sqrt(Δ)
     # The rising root (−B + s)/(2A); for B > 0 the same root as 2C/(−B − s),
@@ -306,9 +311,11 @@ end
 # densities. A component whose boundary with its lower neighbor is not below
 # its boundary with its upper neighbor never has the highest weighted density
 # between them; it is dropped, the boundary between its two neighbors is used,
-# and its regime is empty (equal consecutive thresholds). The first and last
-# components always remain. With equal variances this is exactly the Bayes
-# classifier.
+# and its regime is empty (equal consecutive thresholds). A pair that never
+# crosses has boundary −Inf or +Inf, so the component that never wins drops out
+# by the same test; a first or last component that never wins keeps an empty
+# regime through a −Inf or +Inf threshold. With equal variances this is exactly
+# the Bayes classifier.
 # ----------------------------------------------------------------------------
 function _regime_thresholds(fit)
     μ, σ², w = fit.means, fit.vars, fit.weights
@@ -466,13 +473,14 @@ and weights: the log-density at which the upper component's weighted density
 overtakes the lower one's. That point can lie outside the two means (a light
 component may win only beyond its own mean). A component that never has the
 highest weighted density between its neighbors gets an empty regime: its two
-thresholds are equal, at the boundary between its neighbors. Falls back to the
-midpoint between consecutive means when the quadratic discriminant is negative
-(one component dominates everywhere).
+thresholds are equal, at the boundary between its neighbors. When two
+components' weighted densities never cross, the one that never wins gets no
+regime; for the first or last component that threshold is `-Inf` or `Inf`.
 
 # Returns
-`Vector{Float64}` of length `n_regimes - 1`, sorted ascending. Pass directly
-to `MRFDensityClusterConfig(regime_thresholds = ...)`.
+`Vector{Float64}` of length `n_regimes - 1`, sorted ascending; an end regime
+that never wins makes a threshold `-Inf` or `Inf`. Pass directly to
+`MRFDensityClusterConfig(regime_thresholds = ...)`.
 
 # Errors
 - `ArgumentError` if `n_regimes < 2`, `density_estimator` is unknown,

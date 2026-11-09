@@ -13,9 +13,9 @@ Two localizations are neighbors when
 ```
 
 so precise localizations must be closer to link than imprecise ones. It is a
-`cluster` labeling backend selected by a `PrecisionDBSCANConfig`. It shares its
-neighbor graph and core/border pass with the Euclidean [DBSCAN](@ref) backend; only
-the edge test differs.
+`cluster` labeling backend selected by a `PrecisionDBSCANConfig`. Its core and
+border rules are those of the Euclidean [DBSCAN](@ref) backend; only the edge test
+differs.
 
 ## Concept
 
