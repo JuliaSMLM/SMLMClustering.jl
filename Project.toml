@@ -32,12 +32,14 @@ NearestNeighbors = "0.4"
 Pkg = "1"
 SMLMData = "0.7"
 SMLMRender = "0.1 - 0.5"
+SMLMSim = "0.7"
 Test = "1"
 julia = "1.10"
 
 [extras]
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
+SMLMSim = "5a0a87e4-02d4-41f5-bf26-b8c94c784a04"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Pkg"]
+test = ["Test", "Pkg", "SMLMSim"]
