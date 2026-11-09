@@ -570,13 +570,13 @@ OuterPolygonConfig(alpha_nm=400.0, rho_k_thresh=50.0)
 ### `KdeValleyConfig <: AbstractEdgeClassifyConfig`
 
 **Source:** `src/edge_classify/classify.jl` + `src/edge_classify/gates.jl`
-**Algorithm:** Gaussian-KDE density → background/cell valley threshold → footprint fill → outer-polygon geometry on the footprint subset → 8-ray enclosure reclass. Validated adaptive dSTORM gate; per-FOV adaptive (no per-cell density tuning).
+**Algorithm:** Gaussian-KDE density → background/cell valley threshold → footprint fill → outer-polygon geometry on the footprint subset → 8-ray enclosure reclass. Per-FOV adaptive (no per-cell density tuning).
 **Library:** NearestNeighbors.jl, AdaptivePredicates.jl (built-in pure-Julia Delaunay), Statistics
 
-**Extra fields:** `sigma_nm`=150, `rmax_sigma`=3.0, `valley_nbins`=140, `valley_floorfrac`=0.05, `valley_smooth`=4, `footprint_bin_um`=0.2, `footprint_closing_px`=3, `enclosure_bin_um`=0.2, `enclosure_min_hits`=6. Defaults reproduce the validated A431 dSTORM set (note `alpha_nm`=600).
+**Extra fields:** `sigma_nm`=150, `rmax_sigma`=3.0, `valley_nbins`=140, `valley_floorfrac`=0.05, `valley_smooth`=4, `footprint_bin_um`=0.2, `footprint_closing_px`=3, `enclosure_bin_um`=0.2, `enclosure_min_hits`=6. Note `alpha_nm`=600 (`OuterPolygonConfig`: 300).
 
 **Constructor:**
 ```julia
-KdeValleyConfig()                       # validated A431 defaults
+KdeValleyConfig()                       # defaults
 KdeValleyConfig(sigma_nm=120.0)
 ```

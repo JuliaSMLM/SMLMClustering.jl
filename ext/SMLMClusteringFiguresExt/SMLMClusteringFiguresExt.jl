@@ -7,7 +7,7 @@ using SMLMRender
 
 # ---- class render (SMLMRender) ----------------------------------------------
 
-# class -> single render color (genmab-canonical)
+# class -> single render color
 const _CLASS_RENDER = ((:outside, :gray70), (:membrane, :gold), (:interior, :steelblue))
 
 """
