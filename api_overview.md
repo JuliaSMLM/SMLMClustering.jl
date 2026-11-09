@@ -52,8 +52,8 @@ Shared fields expected on every concrete subtype:
 ### `DBSCANConfig <: AbstractClusterConfig`
 
 **Source:** `src/backends/dbscan.jl`
-**Algorithm:** DBSCAN via `Clustering.dbscan`
-**Library:** Clustering.jl
+**Algorithm:** classical DBSCAN (Ester et al. 1996) in three passes over one KD-tree (core count, union of cores within ε, border attach); same core and border rules as `PrecisionDBSCANConfig`
+**Library:** NearestNeighbors.jl (KD-tree range queries)
 
 **Fields:**
 
@@ -67,7 +67,7 @@ Shared fields expected on every concrete subtype:
 
 **Validation:** `eps_nm > 0`, `min_points >= 1`.
 
-**Scalability:** O(n log n) with a KD-tree; suitable for large datasets.
+**Scalability:** KD-tree range queries, O(n) memory; time grows with the number of pairs within eps. Suitable for large datasets.
 
 **Supports 3D:** yes.
 

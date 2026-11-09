@@ -268,36 +268,148 @@ function _gmm_em_1d(x::Vector{Float64}, k::Int;
 end
 
 # ----------------------------------------------------------------------------
-# Bayes decision boundary between two 1D Gaussians with weights, where
-# log(w1) + log N(x|μ1, σ1²) = log(w2) + log N(x|μ2, σ2²). Reduces to a
-# quadratic A x² + B x + C = 0; pick the root in [μ1, μ2] (the natural
-# inter-mode boundary). Falls back to the midpoint when the discriminant is
-# negative (one component dominates everywhere) or when the in-range root
-# selection is ambiguous.
+# Bayes decision boundary between two 1D Gaussians with weights (μ1 < μ2), where
+# log(w1) + log N(x|μ1, σ1²) = log(w2) + log N(x|μ2, σ2²). Multiplying both sides
+# by −2 gives the quadratic A x² + B x + C = 0 below (the Gaussian normalizers
+# contribute +log σ1² − log σ2² to C); its left side is 2 g(x) with
+# g = log(w2 N2) − log(w1 N1), the log-odds of the upper component.
+#
+# The vertex of g lies beyond the mean of the narrower component, so g rises
+# across [μ1, μ2]: the boundary is the root where g rises, (−B + √Δ)/(2A),
+# whether or not it lies between the means. (When both means fall on the same
+# side of it, the lighter component wins only beyond its own mean; that is still
+# where the hard regime changes.) When the weighted densities never cross, one
+# component wins everywhere and the boundary is where the upper regime starts:
+# −Inf if the upper component wins everywhere, +Inf if it never does. Only two
+# identical weighted components (no preference anywhere) give the shared mean.
 # ----------------------------------------------------------------------------
 function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
                                       μ2::Float64, σ²2::Float64, w2::Float64)
-    # Equal variances → linear: solution is unique and analytic.
     A = 1.0 / σ²1 - 1.0 / σ²2
     B = -2.0 * (μ1 / σ²1 - μ2 / σ²2)
-    C = μ1^2 / σ²1 - μ2^2 / σ²2 + log(σ²2 / σ²1) - 2 * log(w1 / w2)
-    if abs(A) < 1e-12
-        return abs(B) > 1e-12 ? -C / B : (μ1 + μ2) / 2
+    C = μ1^2 / σ²1 - μ2^2 / σ²2 + log(σ²1 / σ²2) - 2 * log(w1 / w2)
+    if A == 0
+        # Equal variances: 2g = Bx + C, rising for μ1 < μ2. With equal means too,
+        # 2g = C everywhere: the heavier component wins everywhere.
+        B != 0 && return -C / B
+        return C > 0 ? -Inf : C < 0 ? Inf : (μ1 + μ2) / 2
     end
     Δ = B^2 - 4.0 * A * C
-    if Δ < 0
-        return (μ1 + μ2) / 2
+    if Δ <= 0
+        # No sign change: 2g has the sign of A everywhere (A > 0: upper wins).
+        return A > 0 ? -Inf : Inf
     end
     s = sqrt(Δ)
-    x1 = (-B - s) / (2.0 * A)
-    x2 = (-B + s) / (2.0 * A)
-    lo, hi = minmax(μ1, μ2)
-    if lo <= x1 <= hi
-        return x1
-    elseif lo <= x2 <= hi
-        return x2
-    else
-        return (μ1 + μ2) / 2
+    # The rising root (−B + s)/(2A); for B > 0 the same root as 2C/(−B − s),
+    # which avoids cancellation when the variances are nearly equal.
+    return B > 0 ? 2.0 * C / (-B - s) : (-B + s) / (2.0 * A)
+end
+
+# ----------------------------------------------------------------------------
+# Every point where two weighted Gaussians have equal weighted log-density
+# (the real roots of A x² + B x + C above; none, one or two), in a
+# cancellation-free form. Used to split a line into pieces on which the order of
+# the weighted densities does not change.
+# ----------------------------------------------------------------------------
+function _gaussian_crossings(μ1::Float64, σ²1::Float64, w1::Float64,
+                             μ2::Float64, σ²2::Float64, w2::Float64)
+    A = 1.0 / σ²1 - 1.0 / σ²2
+    B = -2.0 * (μ1 / σ²1 - μ2 / σ²2)
+    C = μ1^2 / σ²1 - μ2^2 / σ²2 + log(σ²1 / σ²2) - 2 * log(w1 / w2)
+    if A == 0
+        return B != 0 ? [-C / B] : Float64[]
+    end
+    Δ = B^2 - 4.0 * A * C
+    Δ > 0 || return Float64[]
+    q = -(B + copysign(sqrt(Δ), B)) / 2
+    return [q / A, C / q]
+end
+
+# Whether component k has the highest weighted density among the components S
+# (ties allowed) on some stretch of positive width in (lo, hi); touching the top
+# at a single point does not count. Between consecutive pairwise crossings the
+# order of the weighted densities is fixed, so testing one point per piece is
+# exact for that.
+function _wins_in(k::Int, lo::Float64, hi::Float64, S::Vector{Int}, μ, σ², w)
+    lwd(j, x) = log(w[j]) - log(σ²[j]) / 2 - (x - μ[j])^2 / (2σ²[j])
+    cuts = Float64[]
+    for a in S, c in S
+        a < c || continue
+        for r in _gaussian_crossings(μ[a], σ²[a], w[a], μ[c], σ²[c], w[c])
+            lo < r < hi && push!(cuts, r)
+        end
+    end
+    edges = [lo; sort!(cuts); hi]
+    for i in 1:(length(edges) - 1)
+        a, c = edges[i], edges[i + 1]
+        a < c || continue
+        x = isfinite(a) && isfinite(c) ? (a + c) / 2 :
+            isfinite(a) ? a + 1 + abs(a) : isfinite(c) ? c - 1 - abs(c) : 0.0
+        lk = lwd(k, x)
+        all(j -> lwd(j, x) <= lk, S) && return true
+    end
+    return false
+end
+
+# Upper-envelope walk over the components S (mean order): the Bayes boundary
+# between consecutive kept components; one whose lower boundary is not below its
+# upper boundary is dropped. Returns the kept components and the boundaries
+# between them.
+function _envelope_walk(S::Vector{Int}, b)
+    kept = Int[]
+    bnd = Float64[]       # bnd[a] = boundary between kept[a] and kept[a+1]
+    for j in S
+        while !isempty(kept)
+            bj = b(kept[end], j)
+            if !isempty(bnd) && bj <= bnd[end]
+                pop!(kept); pop!(bnd)
+            else
+                push!(bnd, bj)
+                break
+            end
+        end
+        push!(kept, j)
+    end
+    return kept, bnd
+end
+
+# ----------------------------------------------------------------------------
+# Hard-regime thresholds from a mean-sorted Gaussian fit; the rules are stated
+# once, in the calibrate_regime_thresholds docstring ("Boundary computation").
+# 1. A component whose weighted density is below another's everywhere (pairwise
+#    boundary +Inf with a lower one, −Inf with an upper one) is removed.
+# 2. The rest are walked along the upper envelope (_envelope_walk).
+# 3. A kept component that never has the highest weighted density, among the
+#    components not removed, on a stretch of its own interval (_wins_in) is
+#    removed and the walk reruns, until none is removed (at most K passes; a
+#    lone component always passes).
+# Removed components get empty regimes; at either end through −Inf or +Inf.
+# ----------------------------------------------------------------------------
+function _regime_thresholds(fit)
+    μ, σ², w = fit.means, fit.vars, fit.weights
+    K = length(μ)
+    b(i, j) = _gaussian_decision_boundary(μ[i], σ²[i], w[i], μ[j], σ²[j], w[j])
+    # Dominance is antisymmetric and transitive, so some component survives; the
+    # guard covers rounding at a near-tangent pair.
+    alive = [all(i -> b(i, j) != Inf, 1:(j - 1)) && all(k -> b(j, k) != -Inf, (j + 1):K)
+             for j in 1:K]
+    any(alive) || fill!(alive, true)
+    while true
+        S = findall(alive)
+        kept, bnd = _envelope_walk(S, b)
+        lo = [-Inf; bnd]
+        hi = [bnd; Inf]
+        loser = findfirst(a -> !_wins_in(kept[a], lo[a], hi[a], S, μ, σ², w), eachindex(kept))
+        if loser === nothing
+            thresholds = Vector{Float64}(undef, K - 1)
+            thresholds[1:(kept[1] - 1)] .= -Inf
+            for a in 1:(length(kept) - 1)
+                thresholds[kept[a]:(kept[a + 1] - 1)] .= bnd[a]
+            end
+            thresholds[kept[end]:(K - 1)] .= Inf
+            return thresholds
+        end
+        alive[kept[loser]] = false
     end
 end
 
@@ -427,14 +539,39 @@ fixing the regime boundary at the value learned from a higher-quality fit.
 - `density_k::Int = 20`: k for the kNN estimator. Ignored for `:voronoi`.
 
 # Boundary computation
-Each threshold is the analytic Bayes decision boundary between consecutive
-GMM components (sorted ascending by mean), accounting for unequal variances
-and weights. Falls back to the midpoint between consecutive means when the
-quadratic discriminant is negative (one component dominates everywhere).
+This section is the one statement of the rules; the code comments and the
+methods page refer to it. The GMM components are sorted ascending by mean, and
+each regime is one interval of log-density, in that order.
+
+1. A component whose weighted density is below another component's everywhere
+   is removed.
+2. The remaining components are walked in mean order along the upper envelope
+   of the weighted densities. Each threshold is the analytic Bayes decision
+   boundary between consecutive kept components (unequal variances and weights
+   included): the log-density at which the upper component's weighted density
+   overtakes the lower one's. It can lie outside the two means (a light
+   component may win only beyond its own mean). A component whose boundary with
+   its lower neighbor is not below its boundary with its upper neighbor is
+   dropped, and the boundary between its two neighbors is used.
+3. A kept component that never has the highest weighted density on a stretch
+   of its own interval, compared with every component not removed, is removed,
+   and the walk is rerun. One component is removed per pass, the one with the
+   lowest mean first. A component is tested only inside the interval the walk
+   gives it. Ties count as highest; touching the top at a single point does not.
+
+So every non-empty regime contains a stretch where its component has the
+highest weighted density among the components not removed. A removed or dropped
+component gets an empty regime: two equal thresholds, or, for the first or last
+regime, a threshold of `-Inf` or `Inf`. With unequal variances a component can
+have the highest weighted density on two separate ranges. It keeps at most one
+of them, possibly none, and the rest goes to neighboring regimes. With unequal
+variances the thresholds are therefore an interval approximation to the Bayes
+rule; with equal variances they are exactly the Bayes classifier.
 
 # Returns
-`Vector{Float64}` of length `n_regimes - 1`, sorted ascending. Pass directly
-to `MRFDensityClusterConfig(regime_thresholds = ...)`.
+`Vector{Float64}` of length `n_regimes - 1`, sorted ascending; an end regime
+that never wins makes a threshold `-Inf` or `Inf`. Pass directly to
+`MRFDensityClusterConfig(regime_thresholds = ...)`.
 
 # Errors
 - `ArgumentError` if `n_regimes < 2`, `density_estimator` is unknown,
@@ -470,14 +607,8 @@ function calibrate_regime_thresholds(smld::SMLMData.BasicSMLD;
                                      density_estimator = density_estimator,
                                      density_k = density_k)
 
-    # Decision boundary between each pair of consecutive (mean-sorted) components.
-    thresholds = Vector{Float64}(undef, n_regimes - 1)
-    @inbounds for k in 1:(n_regimes - 1)
-        thresholds[k] = _gaussian_decision_boundary(
-            fit.means[k],   fit.vars[k],   fit.weights[k],
-            fit.means[k+1], fit.vars[k+1], fit.weights[k+1])
-    end
-    return thresholds
+    # Bayes boundaries between consecutive (mean-sorted) components.
+    return _regime_thresholds(fit)
 end
 
 # ----------------------------------------------------------------------------

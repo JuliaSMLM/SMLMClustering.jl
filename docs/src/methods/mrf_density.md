@@ -176,9 +176,23 @@ cfg = MRFDensityClusterConfig(
 returns the `(means, vars, weights)` NamedTuple in log-density space, ready to
 pass as `regime_gaussians`. `calibrate_regime_thresholds(smld; n_regimes=2,
 density_estimator=:knn, density_k=20)` is a thin wrapper that returns instead a
-`Vector{Float64}` of length `n_regimes - 1` (the analytic Bayes decision
-boundaries between consecutive components, midpoint fallback when the
-discriminant is negative), ready to pass as `regime_thresholds`.
+`Vector{Float64}` of length `n_regimes - 1`, ready to pass as
+`regime_thresholds`: analytic Bayes decision boundaries between consecutive
+components along the upper envelope of their weighted densities, each regime one
+interval of log-density in mean order. A boundary can lie outside the two means.
+Every non-empty regime contains points where its component has the highest
+weighted density among the components the rules keep. A component the rules
+remove gets an empty regime; for the first or last regime that makes a threshold
+`-Inf` or `Inf`. With equal variances the thresholds are exactly the Bayes
+classifier; with unequal variances they are an interval approximation to it. The
+rules are stated once, in the [`calibrate_regime_thresholds`](@ref) docstring.
+
+Before 0.4.4 a sign error in the log-variance term moved every threshold off the
+Bayes boundary whenever the two variances differed, so localizations near it fell
+in the wrong hard regime. A boundary outside the two means, and a pair of components
+that never cross, were given the midpoint of the means instead; at 3 or more
+regimes that could leave the thresholds unsorted or give a regime to a component
+that never wins.
 
 ## Output & interpretation
 

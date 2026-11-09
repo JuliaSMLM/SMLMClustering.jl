@@ -14,8 +14,8 @@
 #      SMLD-facing path: derives σ_eff from each emitter's localization precision,
 #      builds the graph internally, and writes cluster ids onto `emitter.id`.
 #
-# Unlike the Euclidean `DBSCANConfig` (which wraps `Clustering.dbscan`), the metric
-# here is precision-weighted, so this is a self-contained implementation. The
+# The Euclidean `DBSCANConfig` applies the same core/border rule with the edge test
+# d ≤ eps, streaming over a KD-tree instead of caching the graph (dbscan.jl). The
 # neighbor prepass is threaded (mirrors `local_contrast.jl`); the label pass is
 # deterministic: union-find connected components for `min_points == 0` (order-free,
 # bit-exact regardless of thread scheduling) and a deterministic core-point
@@ -163,7 +163,8 @@ primitive.
   edge order. Every point is labeled `1..K` (a singleton is its own component; no
   noise).
 - `min_points ≥ 1`: core-point DBSCAN with the classical (self-inclusive) `minPts`,
-  identical to [`DBSCANConfig`](@ref). A point is *core* iff its neighborhood — itself
+  the same core/border rule as [`DBSCANConfig`](@ref) (whose edge test is `d ≤ eps`
+  where this one is strict). A point is *core* iff its neighborhood — itself
   plus its active neighbors — has `≥ min_points` members (i.e. active degree
   `≥ min_points − 1`); core points sharing an active edge merge; a non-core *border*
   point joins the **lowest-id** adjacent core cluster (deterministic tie-break); a
@@ -234,7 +235,7 @@ function precision_dbscan_labels!(labels::Vector{Int}, g::PrecisionNeighborGraph
 
     # Core points: classical DBSCAN minPts — a point is core iff its neighborhood
     # (itself + active neighbors) has ≥ min_points members, i.e. active degree ≥
-    # min_points - 1. Matches DBSCANConfig / Clustering.dbscan (self-inclusive count).
+    # min_points - 1. Matches DBSCANConfig (self-inclusive count).
     core = falses(n)
     @inbounds for i in 1:n
         σi = Float64(σ_eff[i]); c = 0

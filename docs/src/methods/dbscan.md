@@ -3,8 +3,8 @@
 DBSCAN (Density-Based Spatial Clustering of Applications with Noise) labels each
 SMLM localization as belonging to a cluster or as noise based on local point
 density. It is a `cluster` labeling backend selected by passing a `DBSCANConfig`,
-and is backed by `Clustering.dbscan` from
-[Clustering.jl](https://github.com/JuliaStats/Clustering.jl). The call
+and implements classical DBSCAN (Ester et al. 1996) with KD-tree range queries,
+with the same core and border rules as [Precision DBSCAN](@ref). The call
 `cluster(smld, cfg::DBSCANConfig)` deep-copies the input emitters, writes a
 per-emitter label into `emitter.id` (`0` = noise, `1..K` = cluster), and returns
 `(smld_out, ClusterInfo)`.
@@ -57,6 +57,12 @@ $p_{i+1}$ is directly density-reachable from the core point $p_i$. Two points ar
 connected core points plus their reachable border points. Points that are neither
 core nor reachable from any core point are **noise**.
 
+Only core points extend a chain: a border point (non-core, within ε of a core
+point) joins the cluster, but its own neighbors do not. A border point within ε of
+core points of two clusters belongs to both in the definition; the backend gives it
+to the cluster with the lower id, so every localization carries one label and the
+result is deterministic for a given emitter order.
+
 ### Units and the metric the code uses
 
 Emitter coordinates on `AbstractEmitter` subtypes are stored in **microns**, but
@@ -68,8 +74,13 @@ Emitter coordinates on `AbstractEmitter` subtypes are stored in **microns**, but
 
 Clustering is then performed directly on the micron coordinate matrix, so the
 neighborhood test is the Euclidean distance $\le \varepsilon_{\mu m}$ in micron
-space. Neighbor queries use a KD-tree (the `Clustering.dbscan` default), which is
-what gives the backend its sub-quadratic scaling.
+space. The comparison is made on squared distances in `Float64`, so a pair placed
+at exactly ε in decimal can land on either side: at `eps_nm = 100`, points at
+x = 1.0 and 1.1 µm differ by 0.10000000000000009 and are not neighbors, while
+(0, 0) and (0.3, 0.4) at `eps_nm = 500` are. Neighbor queries use a KD-tree,
+which is what gives the backend its sub-quadratic scaling. Three passes run over the tree and store no neighbor list:
+core points are counted (threaded), core points within ε of each other are merged
+with union-find, and border points are then attached (threaded).
 
 ### 2D vs 3D
 
@@ -150,22 +161,27 @@ count.
 
 ## Notes & caveats
 
-- **Scaling.** Neighbor queries run on a KD-tree, so there is no O(n²)
-  pairwise-distance matrix and no corresponding memory blow-up. This is the reason
-  DBSCAN is preferred over the hierarchical backend for groups with many thousands
-  of localizations.
+- **Scaling.** Neighbor queries run on a KD-tree and no neighbor list is kept, so
+  memory is O(n) at any ε. Time grows with the number of pairs within ε (each
+  point's range query is read three times). This is the reason DBSCAN is preferred
+  over the hierarchical backend for groups with many thousands of localizations.
 - **`min_points` semantics.** The same value sets both the core-point threshold
-  and the minimum cluster size: a candidate cluster whose final membership is below
-  `min_points` is dropped (its points become noise). `min_points` must be `≥ 1`;
-  `eps_nm` must be `> 0`. Both are validated at the start of the call and raise
-  `ArgumentError` otherwise.
-- **Boundary points / counting source of truth.** Sizes and labels are recounted
-  from `Clustering.jl`'s per-point `assignments` (last-writer-wins, each point
-  assigned exactly once), **not** from its `counts`. A boundary point that touches
-  two clusters is counted in both clusters' `counts`, so summing `counts` can
-  exceed the point count and inflate sizes; the backend avoids this by using
-  `assignments`, then compact-relabels the survivors `1..K` within each group so
-  the reported `cluster_sizes` stay consistent with the written labels.
+  and the minimum cluster size: a cluster whose final membership is below
+  `min_points` is dropped (its points become noise). That can happen only when a
+  neighboring cluster with a lower id takes some of its border points. `min_points`
+  must be `≥ 1`; `eps_nm` must be `> 0`. Both are validated at the start of the call
+  and raise `ArgumentError` otherwise.
+- **Agreement with precision-weighted DBSCAN.** With every emitter at the same
+  precision σ, `PrecisionDBSCANConfig(nsigma)` and `DBSCANConfig(eps_nm =
+  1000 · nsigma · 2σ)` give the same labels, except for a pair at exactly that
+  distance (DBSCAN counts it, `≤`; the precision backend does not, `<`).
+- **Before 0.4.4.** Earlier versions wrapped `Clustering.dbscan` (Clustering.jl
+  0.15), which adds the neighbors of a border point to the cluster as well, so a
+  cluster could reach up to 2ε past its last core point. That happens only with
+  `min_points ≥ 4` (with 2 or 3, a border point's only neighbor is the core point
+  that reached it). Localizations within ε of no core point, which classical DBSCAN
+  calls noise, were then counted as cluster members, so clusters came out larger
+  and wider than classical DBSCAN's.
 - **2D vs 3D.** Both are supported. 3D needs emitters that carry a `z` field;
   otherwise an error is raised.
 - **Per-dataset grouping.** With `per_dataset = true`, datasets are processed in
@@ -181,5 +197,3 @@ count.
   Discovering Clusters in Large Spatial Databases with Noise," *Proceedings of the
   2nd International Conference on Knowledge Discovery and Data Mining (KDD-96)*,
   AAAI Press, 1996, pp. 226–231.
-- Implementation backend:
-  [Clustering.jl](https://github.com/JuliaStats/Clustering.jl) (`Clustering.dbscan`).
