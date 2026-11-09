@@ -3,7 +3,6 @@ using SMLMClustering
 using SMLMClustering: build_precision_neighbor_graph, precision_dbscan_labels,
                       precision_dbscan_labels!, PrecisionNeighborGraph
 using SMLMData
-using Clustering        # to cross-check min_points against classical DBSCAN minPts
 using Test
 using Random
 

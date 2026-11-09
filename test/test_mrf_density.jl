@@ -350,6 +350,45 @@ include(joinpath(@__DIR__, "long", "utils", "helpers.jl"))
         @test all(agree)
     end
 
+    @testset "regime thresholds: every non-empty regime holds points its component wins" begin
+        lwn(x, m, v, w) = log(w) - 0.5 * log(2π * v) - (x - m)^2 / (2v)
+        thr = SMLMClustering._regime_thresholds
+        # Brute force on a fine grid: each non-empty regime [t_{k-1}, t_k) holds a point
+        # where component k has the highest weighted density of all the components.
+        function wins_in_own_regime(m, v, w, t)
+            K = length(m); te = [-Inf; t; Inf]
+            xs = range(minimum(m .- 12 .* sqrt.(v)), maximum(m .+ 12 .* sqrt.(v)); length = 20001)
+            best = map(x -> argmax(j -> lwn(x, m[j], v[j], w[j]), 1:K), xs)
+            return all(1:K) do k
+                inside = findall(x -> te[k] <= x < te[k + 1], xs)
+                isempty(inside) || any(i -> best[i] == k, inside)
+            end
+        end
+        # 4 regimes, unequal variances: the neighbor-only walk gave component 3 the range
+        # [-0.83, -0.21), where component 1 is highest everywhere; now its regime is empty.
+        w4 = [0.342, 0.254, 0.099, 0.304]; w4 ./= sum(w4)
+        f4 = (means = [-2.506, -2.313, 0.291, 1.650], vars = [2.447, 0.496, 4.875, 0.858], weights = w4)
+        t4 = thr(f4)
+        @test t4[2] == t4[3]
+        @test wins_in_own_regime(f4.means, f4.vars, f4.weights, t4)
+        # 3 regimes: the end component 1 kept (-Inf, -0.83) though it is highest nowhere,
+        # while the broad component 2, highest on most of that range, had an empty regime.
+        f3 = (means = [0.433, 0.515, 0.729], vars = [0.826, 1.802, 0.663], weights = [0.234, 0.267, 0.499])
+        t3 = thr(f3)
+        @test t3[1] == -Inf
+        @test -0.71 < t3[2] < -0.69
+        @test wins_in_own_regime(f3.means, f3.vars, f3.weights, t3)
+        # Random unequal-variance mixtures at 3 to 5 regimes.
+        rng = Xoshiro(16)
+        ok = Bool[]
+        for K in 3:5, _ in 1:400
+            m = sort(2 .* randn(rng, K)); v = exp.(randn(rng, K)); w = rand(rng, K); w ./= sum(w)
+            t = thr((means = m, vars = v, weights = w))
+            push!(ok, issorted(t) && wins_in_own_regime(m, v, w, t))
+        end
+        @test all(ok)
+    end
+
     @testset "calibrate_regime_thresholds: argument validation" begin
         smld = _make_2d_smld([(0.0, 0.0, 1), (1.0, 0.0, 1), (0.0, 1.0, 1),
                               (1.0, 1.0, 1), (0.5, 0.5, 1)])

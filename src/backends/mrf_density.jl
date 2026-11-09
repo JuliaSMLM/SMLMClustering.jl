@@ -306,17 +306,83 @@ function _gaussian_decision_boundary(μ1::Float64, σ²1::Float64, w1::Float64,
 end
 
 # ----------------------------------------------------------------------------
-# Hard-regime thresholds from a mean-sorted Gaussian fit. A component whose
-# weighted density is below another component's everywhere (pairwise boundary
-# +Inf with a lower one, −Inf with an upper one) never wins and gets no regime.
-# The others are walked along the upper envelope: the Bayes boundary between
-# consecutive survivors. A survivor whose boundary with its lower neighbor is not
-# below its boundary with its upper neighbor never has the highest weighted
-# density between them; it is dropped, the boundary between its two neighbors is
-# used, and its regime is empty (equal consecutive thresholds). Empty regimes at
-# either end give −Inf or +Inf thresholds. Hard regimes are intervals in mean
-# order, so a broad component that wins again far out in a tail does not get
-# that tail. With equal variances this is exactly the Bayes classifier.
+# Every point where two weighted Gaussians have equal weighted log-density
+# (the real roots of A x² + B x + C above; none, one or two), in a
+# cancellation-free form. Used to split a line into pieces on which the order of
+# the weighted densities does not change.
+# ----------------------------------------------------------------------------
+function _gaussian_crossings(μ1::Float64, σ²1::Float64, w1::Float64,
+                             μ2::Float64, σ²2::Float64, w2::Float64)
+    A = 1.0 / σ²1 - 1.0 / σ²2
+    B = -2.0 * (μ1 / σ²1 - μ2 / σ²2)
+    C = μ1^2 / σ²1 - μ2^2 / σ²2 + log(σ²1 / σ²2) - 2 * log(w1 / w2)
+    if A == 0
+        return B != 0 ? [-C / B] : Float64[]
+    end
+    Δ = B^2 - 4.0 * A * C
+    Δ > 0 || return Float64[]
+    q = -(B + copysign(sqrt(Δ), B)) / 2
+    return [q / A, C / q]
+end
+
+# Whether component k has the highest weighted density among the components S
+# (ties allowed) somewhere in (lo, hi). Between consecutive pairwise crossings
+# the order of the weighted densities is fixed, so testing one point per piece
+# is exact.
+function _wins_in(k::Int, lo::Float64, hi::Float64, S::Vector{Int}, μ, σ², w)
+    lwd(j, x) = log(w[j]) - log(σ²[j]) / 2 - (x - μ[j])^2 / (2σ²[j])
+    cuts = Float64[]
+    for a in S, c in S
+        a < c || continue
+        for r in _gaussian_crossings(μ[a], σ²[a], w[a], μ[c], σ²[c], w[c])
+            lo < r < hi && push!(cuts, r)
+        end
+    end
+    edges = [lo; sort!(cuts); hi]
+    for i in 1:(length(edges) - 1)
+        a, c = edges[i], edges[i + 1]
+        a < c || continue
+        x = isfinite(a) && isfinite(c) ? (a + c) / 2 :
+            isfinite(a) ? a + 1 + abs(a) : isfinite(c) ? c - 1 - abs(c) : 0.0
+        lk = lwd(k, x)
+        all(j -> lwd(j, x) <= lk, S) && return true
+    end
+    return false
+end
+
+# Upper-envelope walk over the components S (mean order): the Bayes boundary
+# between consecutive kept components; one whose lower boundary is not below its
+# upper boundary is dropped. Returns the kept components and the boundaries
+# between them.
+function _envelope_walk(S::Vector{Int}, b)
+    kept = Int[]
+    bnd = Float64[]       # bnd[a] = boundary between kept[a] and kept[a+1]
+    for j in S
+        while !isempty(kept)
+            bj = b(kept[end], j)
+            if !isempty(bnd) && bj <= bnd[end]
+                pop!(kept); pop!(bnd)
+            else
+                push!(bnd, bj)
+                break
+            end
+        end
+        push!(kept, j)
+    end
+    return kept, bnd
+end
+
+# ----------------------------------------------------------------------------
+# Hard-regime thresholds from a mean-sorted Gaussian fit; the rules are stated
+# once, in the calibrate_regime_thresholds docstring ("Boundary computation").
+# 1. A component whose weighted density is below another's everywhere (pairwise
+#    boundary +Inf with a lower one, −Inf with an upper one) is removed.
+# 2. The rest are walked along the upper envelope (_envelope_walk).
+# 3. A kept component that never has the highest weighted density, among the
+#    components not removed, inside its own interval is removed and the walk
+#    reruns, until none is removed (at most K passes; a lone component always
+#    passes).
+# Removed components get empty regimes; at either end through −Inf or +Inf.
 # ----------------------------------------------------------------------------
 function _regime_thresholds(fit)
     μ, σ², w = fit.means, fit.vars, fit.weights
@@ -327,27 +393,23 @@ function _regime_thresholds(fit)
     alive = [all(i -> b(i, j) != Inf, 1:(j - 1)) && all(k -> b(j, k) != -Inf, (j + 1):K)
              for j in 1:K]
     any(alive) || fill!(alive, true)
-    kept = Int[]          # surviving components, in mean order
-    bnd = Float64[]       # bnd[a] = boundary between kept[a] and kept[a+1]
-    for j in findall(alive)
-        while !isempty(kept)
-            bj = b(kept[end], j)
-            if !isempty(bnd) && bj <= bnd[end]
-                pop!(kept); pop!(bnd)          # kept[end] never wins: drop it
-            else
-                push!(bnd, bj)
-                break
+    while true
+        S = findall(alive)
+        kept, bnd = _envelope_walk(S, b)
+        lo = [-Inf; bnd]
+        hi = [bnd; Inf]
+        loser = findfirst(a -> !_wins_in(kept[a], lo[a], hi[a], S, μ, σ², w), eachindex(kept))
+        if loser === nothing
+            thresholds = Vector{Float64}(undef, K - 1)
+            thresholds[1:(kept[1] - 1)] .= -Inf
+            for a in 1:(length(kept) - 1)
+                thresholds[kept[a]:(kept[a + 1] - 1)] .= bnd[a]
             end
+            thresholds[kept[end]:(K - 1)] .= Inf
+            return thresholds
         end
-        push!(kept, j)
+        alive[kept[loser]] = false
     end
-    thresholds = Vector{Float64}(undef, K - 1)
-    thresholds[1:(kept[1] - 1)] .= -Inf
-    for a in 1:(length(kept) - 1)
-        thresholds[kept[a]:(kept[a + 1] - 1)] .= bnd[a]
-    end
-    thresholds[kept[end]:(K - 1)] .= Inf
-    return thresholds
 end
 
 function _log_density_values(smld::SMLMData.BasicSMLD,
@@ -476,18 +538,31 @@ fixing the regime boundary at the value learned from a higher-quality fit.
 - `density_k::Int = 20`: k for the kNN estimator. Ignored for `:voronoi`.
 
 # Boundary computation
-Each threshold is the analytic Bayes decision boundary between consecutive
-GMM components (sorted ascending by mean), accounting for unequal variances
-and weights: the log-density at which the upper component's weighted density
-overtakes the lower one's. That point can lie outside the two means (a light
-component may win only beyond its own mean). A component whose weighted
-density is below another component's everywhere gets no regime, and one that
-never has the highest weighted density between its neighbors gets an empty
-regime: its two thresholds are equal, at the boundary between its neighbors.
-An empty first or last regime makes a threshold `-Inf` or `Inf`. Regimes are
-intervals in mean order, so with unequal variances a broad component that has
-the highest weighted density again far out in a tail does not get that tail.
-With equal variances the thresholds are exactly the Bayes classifier.
+This section is the one statement of the rules; the code comments and the
+methods page refer to it. The GMM components are sorted ascending by mean, and
+each regime is one interval of log-density, in that order.
+
+1. A component whose weighted density is below another component's everywhere
+   is removed.
+2. The remaining components are walked in mean order along the upper envelope
+   of the weighted densities. Each threshold is the analytic Bayes decision
+   boundary between consecutive kept components (unequal variances and weights
+   included): the log-density at which the upper component's weighted density
+   overtakes the lower one's. It can lie outside the two means (a light
+   component may win only beyond its own mean). A component whose boundary with
+   its lower neighbor is not below its boundary with its upper neighbor is
+   dropped, and the boundary between its two neighbors is used.
+3. A kept component that never has the highest weighted density inside its own
+   interval, compared with every component not removed, is removed, and the
+   walk is rerun.
+
+So every non-empty regime contains points where its component has the highest
+weighted density among the components not removed. A removed or dropped
+component gets an empty regime: two equal thresholds, or, for the first or last
+regime, a threshold of `-Inf` or `Inf`. With unequal variances a component can
+have the highest weighted density on two separate ranges; an interval regime
+holds only one of them, and the other goes to a neighboring regime. With equal
+variances the thresholds are exactly the Bayes classifier.
 
 # Returns
 `Vector{Float64}` of length `n_regimes - 1`, sorted ascending; an end regime

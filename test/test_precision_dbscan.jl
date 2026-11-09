@@ -3,9 +3,9 @@ using SMLMClustering
 using SMLMClustering: build_precision_neighbor_graph, precision_dbscan_labels,
                       precision_dbscan_labels!, PrecisionNeighborGraph
 using SMLMData
-using Clustering        # to cross-check min_points against classical DBSCAN minPts
 using Test
 using Random
+include(joinpath(@__DIR__, "long", "utils", "helpers.jl"))   # _ref_dbscan_classical
 
 # Same 2D SMLD builder shape as `_make_2d_smld` in long/utils/helpers.jl (precision σ_x = σ_y = 0.01 μm).
 function _make_prec_smld(points::Vector{Tuple{Float64,Float64,Int}};
@@ -148,14 +148,15 @@ _prec_blob(rng, cx, cy, σ, n; dataset = 1) =
     @testset "min_points == classical DBSCAN minPts (self-inclusive)" begin
         # 5 collinear points (radius 1.5 → interior active degree 2, endpoints 1) + 1
         # isolated point. The self-inclusive fix makes precision's min_points identical
-        # to Clustering.dbscan's min_neighbors across the core/border/noise regimes:
+        # to classical DBSCAN's minPts across the core/border/noise regimes (checked
+        # against the brute-force classical reference in long/utils/helpers.jl):
         # min_points=3 clusters the whole chain (it was ALL-NOISE under the old
         # self-exclusive count) and marks the isolated point noise.
         X = [0.0 1.0 2.0 3.0 4.0 20.0; 0.0 0.0 0.0 0.0 0.0 0.0]
         g = build_precision_neighbor_graph(X, 30.0)
         σ = fill(1.0, 6)                      # threshold = nsigma·2; nsigma=0.75 → 1.5
         for m in (2, 3, 4)
-            ref = Clustering.dbscan(X, 1.5; min_neighbors = m, min_cluster_size = 1).assignments
+            ref, _ = _ref_dbscan_classical(X, 1.5, m)
             @test precision_dbscan_labels(g, σ, 0.75; min_points = m) == ref
         end
         @test precision_dbscan_labels(g, σ, 0.75; min_points = 3) == [1, 1, 1, 1, 1, 0]
