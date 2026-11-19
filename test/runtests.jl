@@ -1,63 +1,180 @@
-using SMLMClustering
-using SMLMData
-using Test
+# Lab test runner (admiral decisions 0008, 0009). Identical in every package: do not edit;
+# declare groups in test_groups.toml and put tests in the group folders instead.
+# GROUP: unset or "Core" runs Core; "QA" or "GPU,Long" runs those; "Everything" runs every
+# declared group whose requirement is met on this machine. LAB_TEST_SUMMARY=<path> writes a
+# TOML summary there.
+using Test, TOML, Pkg
 
-# Test-tier gate. Default off → only the fast tier runs (interface, exports,
-# Config round-trip, basic correctness). Set SMLM_TEST_FULL=true (or any value
-# accepted as truthy here) to also run the thorough tier — multi-blob ground-
-# truth recovery, edge cases, statistical value checks, large-n stress, etc.
-# Cross-package convention shared with SMLMAnalysis / SMLMBaGoL /
-# SMLMDriftCorrection; see Round History in STATUS.md for the rollout note.
-const SMLM_TEST_FULL = lowercase(get(ENV, "SMLM_TEST_FULL", "false")) in ("true", "1", "yes")
+const GROUPS = ("Core", "QA", "GPU", "Data", "Long", "Hardware")
+const TESTDIR = @__DIR__
+const PKGROOT = dirname(TESTDIR)
+const CFG = TOML.parsefile(joinpath(TESTDIR, "test_groups.toml"))
 
-# Dummy concrete subtype used to exercise the abstract `cluster` fallback.
-# Defined at top level because @testset scoping disallows struct definitions
-# inside its body.
-struct _DummyClusterCfg <: AbstractClusterConfig end
+folder(g) = g == "Core" ? TESTDIR : joinpath(TESTDIR, lowercase(g))
+testfiles(g) = sort(
+    [
+        joinpath(folder(g), f) for f in readdir(folder(g))
+            if endswith(f, ".jl") && f != "runtests.jl" && isfile(joinpath(folder(g), f))
+    ]
+)
 
-@testset "SMLMClustering.jl" begin
-
-    @testset "types — abstract interface" begin
-        @test AbstractClusterConfig <: SMLMData.AbstractSMLMConfig
-        @test ClusterInfo <: SMLMData.AbstractSMLMInfo
-    end
-
-    @testset "ClusterInfo construction" begin
-        info = ClusterInfo(100, 85, 15, 4, [20, 25, 18, 22], :dbscan, 0.123)
-        @test info.n_locs_in == 100
-        @test info.n_clustered == 85
-        @test info.n_noise == 15
-        @test info.n_clusters == 4
-        @test info.cluster_sizes == [20, 25, 18, 22]
-        @test sum(info.cluster_sizes) == info.n_clustered
-        @test info.algorithm === :dbscan
-        @test info.elapsed_s ≈ 0.123
-    end
-
-    @testset "cluster() abstract fallback errors" begin
-        # The abstract fallback should refuse for any config subtype without a
-        # concrete `cluster` method — exercised via a dummy subtype here.
-        cam = IdealCamera(1:8, 1:8, 0.1)
-        smld = BasicSMLD(SMLMData.Emitter2DFit{Float64}[], cam, 1, 1, Dict{String,Any}())
-        @test_throws ErrorException cluster(smld, _DummyClusterCfg())
-    end
-
-    include("test_dbscan.jl")
-    include("test_precision_dbscan.jl")
-    include("test_hdbscan.jl")
-    include("test_hierarchical.jl")
-    include("test_voronoi.jl")
-    include("test_cluster_statistics.jl")
-    include("test_hopkins.jl")
-    include("test_voronoi_density.jl")
-    include("test_local_contrast.jl")
-    include("test_mrf_density.jl")
-    include("test_point_hysteresis.jl")
-    include("test_edge_classify.jl")
-    include("test_region.jl")
-
+# Layout check: a test file must never silently not run.
+for g in keys(CFG)
+    g in GROUPS ||
+        error("test_groups.toml: unknown group $g (allowed: $(join(GROUPS, ", ")))")
+    isdir(folder(g)) && !isempty(testfiles(g)) ||
+        error("group $g is declared but $(folder(g)) has no .jl files")
+end
+for d in readdir(TESTDIR)
+    isdir(joinpath(TESTDIR, d)) || continue
+    any(g -> g != "Core" && haskey(CFG, g) && lowercase(g) == d, GROUPS) ||
+        error("test/$d/ is not the folder of a group declared in test_groups.toml")
 end
 
-if !SMLM_TEST_FULL
-    @info "Skipping thorough tests; set SMLM_TEST_FULL=true to enable"
+# Returns nothing when the GPU package pkg (CUDA or AMDGPU) is in the group env and functional,
+# else the reason it is not.
+function gpuunmet(g, pkg)
+    Base.find_package(pkg) === nothing && return "$pkg.jl is not in the $g environment"
+    Core.eval(Main, :(import $(Symbol(pkg))))
+    Base.invokelatest(() -> getfield(Main, Symbol(pkg)).functional()) ||
+        return "$pkg.functional() is false"
+    return nothing
 end
+
+# Returns nothing when every requirement of group g is met, else the reason it is not.
+function unmet(g)
+    for r in get(CFG[g], "requires", String[])
+        if r == "cuda"
+            why = gpuunmet(g, "CUDA")
+            why === nothing || return why
+        elseif r == "amdgpu"
+            why = gpuunmet(g, "AMDGPU")
+            why === nothing || return why
+        elseif r == "gpu"
+            whys = [gpuunmet(g, p) for p in ("CUDA", "AMDGPU")]
+            any(isnothing, whys) || return join(whys, "; ")
+        elseif r == "data"
+            p = expanduser(get(CFG[g], "data_path", ""))
+            isempty(p) && error("test_groups.toml: $g requires data but sets no data_path")
+            ispath(p) || return "data_path $p does not exist"
+        elseif r == "hardware"
+            get(ENV, "TEST_HARDWARE", "") == "1" || return "TEST_HARDWARE=1 is not set"
+        elseif r == "display"
+            Sys.islinux() && isempty(get(ENV, "DISPLAY", "")) &&
+                return "DISPLAY is not set (run under xvfb-run)"
+        else
+            error(
+                "test_groups.toml: $g has unknown requirement \"$r\" (cuda, amdgpu, gpu, data, hardware, display)"
+            )
+        end
+    end
+    return nothing
+end
+
+# A group with its own test/<group>/Project.toml runs in a fresh julia process, in a
+# temporary copy of that environment with the package developed into it, so its
+# dependencies (CUDA) never enter the Core env and the versions Core loaded never reach it.
+# The child runs this file for that group alone (LAB_TEST_CHILD set) and returns its
+# summary; a child that crashes or writes none is a failure, never a pass.
+const CHILD = haskey(ENV, "LAB_TEST_CHILD")
+ownenv(g) = !CHILD && g != "Core" && isfile(joinpath(folder(g), "Project.toml"))
+
+function runchild(g)
+    t0, prev, tmp = time(), Base.active_project(), mktempdir()
+    cp(joinpath(folder(g), "Project.toml"), joinpath(tmp, "Project.toml"))
+    Pkg.activate(tmp; io = devnull)
+    try
+        Pkg.develop(Pkg.PackageSpec(path = PKGROOT); io = devnull)
+        Pkg.instantiate(; io = devnull)
+    finally
+        Pkg.activate(prev; io = devnull)
+    end
+    out = joinpath(tmp, "summary.toml")
+    ni = Threads.nthreads(:interactive)  # Julia 1.10 and 1.11 reject an explicit ",0"
+    nt = "$(Threads.nthreads(:default))" * (ni > 0 ? ",$ni" : "")
+    cmd = `$(Base.julia_cmd()) --threads=$nt --project=$tmp $(@__FILE__)`
+    env = ("GROUP" => g, "LAB_TEST_CHILD" => "1", "LAB_TEST_SUMMARY" => out)
+    foreach(flush, (stdout, stderr))  # so Core's output prints before the child's
+    p = run(ignorestatus(addenv(cmd, env...)))
+    r = success(p) && isfile(out) ? get(TOML.parsefile(out)["groups"], g, nothing) : nothing
+    r === nothing || return r
+    return Dict{String, Any}(
+        "ran" => true, "passed" => false, "pass" => 0, "fail" => 0, "error" => 1,
+        "broken" => 0, "seconds" => round(time() - t0; digits = 1),
+        "reason" => "the $g process wrote no summary: exit code $(p.exitcode), " *
+            "signal $(p.termsignal)"
+    )
+end
+
+function counts(ts)
+    c = Test.get_test_counts(ts)  # a Tuple before Julia 1.11, a TestCounts after
+    return c isa Tuple ? (pass = c[1] + c[5], fail = 0, error = 0, broken = c[4] + c[8]) :
+        (
+            pass = c.passes + c.cumulative_passes, fail = 0, error = 0,
+            broken = c.broken + c.cumulative_broken,
+        )
+end
+
+# Runs group g: each file in its own module (like SafeTestsets) and its own @testset.
+function rungroup(g)
+    t0 = time()
+    reason = unmet(g)
+    reason === nothing ||
+        return Dict{String, Any}("ran" => false, "passed" => false, "reason" => reason)
+    printstyled("GROUP $g\n"; bold = true)
+    c = try
+        counts(
+            @testset "$g" begin
+                for f in testfiles(g)
+                    @testset "$(relpath(f, TESTDIR))" begin
+                        Core.eval(
+                            Main, :(
+                                module $(gensym(:testfile))
+                                include($f)
+                                end
+                            )
+                        )
+                    end
+                end
+            end
+        )
+    catch e
+        e isa Test.TestSetException || rethrow()
+        (pass = e.pass, fail = e.fail, error = e.error, broken = e.broken)
+    end
+    return Dict{String, Any}(
+        "ran" => true, "passed" => c.fail + c.error == 0, "pass" => c.pass,
+        "fail" => c.fail, "error" => c.error, "broken" => c.broken,
+        "seconds" => round(time() - t0; digits = 1)
+    )
+end
+
+sel = strip(get(ENV, "GROUP", ""))
+sel = isempty(sel) ? "Core" : sel
+explicit = sel != "Everything"
+wanted = explicit ? strip.(split(sel, ",")) : [g for g in GROUPS if haskey(CFG, g)]
+for g in wanted
+    haskey(CFG, g) || error("GROUP=$sel: $g is not declared in test_groups.toml")
+end
+
+results = Dict{String, Any}()
+for g in GROUPS
+    g in wanted || continue
+    results[g] = ownenv(g) ? runchild(g) : rungroup(g)
+    r = results[g]
+    r["ran"] || CHILD || println(explicit ? "ERROR" : "SKIPPED", " group $g: ", r["reason"])
+end
+
+if haskey(ENV, "LAB_TEST_SUMMARY")
+    open(ENV["LAB_TEST_SUMMARY"], "w") do io
+        TOML.print(
+            io, Dict(
+                "julia" => string(VERSION), "host" => first(split(gethostname(), '.')),
+                "selection" => sel, "groups" => results
+            ); sorted = true
+        )
+    end
+end
+bad = [g for (g, r) in results if r["ran"] ? !r["passed"] : explicit]
+CHILD || isempty(bad) ||
+    error("test groups failed or could not run: $(join(sort(bad), ", "))")
