@@ -624,9 +624,9 @@ function _warn_empty_regimes(thresholds::Vector{Float64}, n_regimes::Int)
     empty_regimes = findall(k -> lo[k] >= hi[k], 1:n_regimes)
     isempty(empty_regimes) ||
         @warn "calibrate_regime_thresholds: regime(s) $(empty_regimes) of $(n_regimes) " *
-              "never have the highest weighted density in the calibration fit, so " *
-              "they receive no emitters; thresholds = $(thresholds). Try a different " *
-              "calibration ROI or fewer regimes."
+              "get an empty log-density interval under the boundary rules (see the " *
+              "docstring), so they receive no emitters; thresholds = $(thresholds). " *
+              "Try a different calibration ROI or fewer regimes."
     return empty_regimes
 end
 

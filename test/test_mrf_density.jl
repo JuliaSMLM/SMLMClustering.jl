@@ -489,6 +489,12 @@ include(joinpath(@__DIR__, "long", "utils", "helpers.jl"))
         @test (@test_logs (:warn, r"regime\(s\) \[2\] of 3") we([1.0, 1.0], 3)) == [2]
         @test (@test_logs (:warn, r"regime\(s\) \[1, 3\] of 3") we([-Inf, Inf], 3)) == [1, 3]
         @test (@test_logs (:warn,) we([-Inf, -Inf], 3)) == [1, 2]
+        # The exported function warns: 30 uniform points fitted with four regimes leave
+        # regime 2 empty (two equal thresholds).
+        rng = Xoshiro(1)
+        smld30 = _make_2d_smld([(rand(rng), rand(rng), 1) for _ in 1:30])
+        thr = @test_logs (:warn, r"regime\(s\) \[2\] of 4") calibrate_regime_thresholds(smld30; n_regimes = 4)
+        @test length(thr) == 3 && thr[1] == thr[2] && thr[2] < thr[3]
     end
 
 end
