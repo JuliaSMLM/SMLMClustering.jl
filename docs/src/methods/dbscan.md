@@ -78,9 +78,11 @@ space. The comparison is made on squared distances in `Float64`, so a pair place
 at exactly ε in decimal can land on either side: at `eps_nm = 100`, points at
 x = 1.0 and 1.1 µm differ by 0.10000000000000009 and are not neighbors, while
 (0, 0) and (0.3, 0.4) at `eps_nm = 500` are. Neighbor queries use a KD-tree,
-which is what gives the backend its sub-quadratic scaling. Three passes run over the tree and store no neighbor list:
-core points are counted (threaded), core points within ε of each other are merged
-with union-find, and border points are then attached (threaded).
+which is what gives the backend its sub-quadratic scaling. Two passes run over the tree and store no neighbor list:
+each point's neighbors are counted to find the core points (threaded, without
+building the neighbor list), and clusters are then grown in index order from each
+unlabeled core point, range-querying core points only; every unlabeled point
+within ε of a core point takes that cluster's id.
 
 ### 2D vs 3D
 
@@ -162,13 +164,17 @@ count.
 ## Notes & caveats
 
 - **Scaling.** Neighbor queries run on a KD-tree and no neighbor list is kept, so
-  memory is O(n) at any ε. Time grows with the number of pairs within ε (each
-  point's range query is read three times). This is the reason DBSCAN is preferred
+  memory is O(n) at any ε. Time grows with the number of pairs within ε (every
+  point's neighbors are counted once, and each core point's are listed once more).
+  This is the reason DBSCAN is preferred
   over the hierarchical backend for groups with many thousands of localizations.
 - **`min_points` semantics.** The same value sets both the core-point threshold
   and the minimum cluster size: a cluster whose final membership is below
   `min_points` is dropped (its points become noise). That can happen only when a
-  neighboring cluster with a lower id takes some of its border points. `min_points`
+  neighboring cluster with a lower id takes some of its border points. Those border
+  points then become noise even when a core point of a surviving cluster lies
+  within ε of them, and which clusters survive can depend on the order of the
+  emitters. `min_points`
   must be `≥ 1`; `eps_nm` must be `> 0`. Both are validated at the start of the call
   and raise `ArgumentError` otherwise.
 - **Agreement with precision-weighted DBSCAN.** With every emitter at the same

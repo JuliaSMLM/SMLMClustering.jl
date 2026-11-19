@@ -5,7 +5,7 @@
 # writes per-emitter cluster labels into `emitter.id` (0 = noise, 1..K = cluster)
 # and returns `(smld_out, ClusterInfo)`.
 #
-# `_dbscan_labels` is the package's own implementation: three passes over one KD-tree
+# `_dbscan_labels` is the package's own implementation: two passes over one KD-tree
 # with O(n) memory (no neighbor list is stored), the same core/border rule as
 # PrecisionDBSCANConfig's `precision_dbscan_labels`. It does not wrap
 # `Clustering.dbscan`: Clustering.jl 0.15 adds the neighbors of every explored point
@@ -121,12 +121,15 @@ end
 
 # Classical DBSCAN labels for a D×n coordinate matrix X (μm) with radius r (μm):
 # neighborhoods are d ≤ r (KD-tree `inrange`, inclusive) and include the point itself.
-# Three passes over one tree, O(n) memory (each range query is consumed and dropped):
-#   1. core[i] = |N(i)| ≥ min_points                       (threaded, one entry per i)
-#   2. union-find over core points within r of each other  (serial)
-#   3. ids 1..K by first core point; each non-core point takes the lowest id among
-#      the core points within r, else 0                    (threaded, reads core ids only)
-# A non-core point's own neighbors are never added. Deterministic for a given order.
+# Two passes over one tree, O(n) memory (no neighbor list is kept):
+#   1. core[i] = |N(i)| ≥ min_points, by `inrangecount`     (threaded, no allocation)
+#   2. clusters grown in index order from each unlabeled core point: every core
+#      point reached is expanded, every unlabeled point within r of it takes the
+#      cluster's id                                          (serial, one reused buffer)
+# Only core points are range-queried in pass 2; a non-core point's own neighbors are
+# never added. A cluster is grown to completion before the next starts, so a non-core
+# point within r of cores of several clusters takes the lowest id. Ids follow each
+# cluster's first core point. Deterministic for a given order.
 function _dbscan_labels(X::Matrix{Float64}, r::Float64, min_points::Int)
     n = size(X, 2)
     labels = zeros(Int, n)
@@ -134,33 +137,26 @@ function _dbscan_labels(X::Matrix{Float64}, r::Float64, min_points::Int)
     tree = NearestNeighbors.KDTree(X)
     core = Vector{Bool}(undef, n)      # Vector{Bool}, not BitVector: written from threads
     Threads.@threads for i in 1:n
-        core[i] = length(NearestNeighbors.inrange(tree, view(X, :, i), r)) >= min_points
+        core[i] = NearestNeighbors.inrangecount(tree, view(X, :, i), r) >= min_points
     end
-    parent = collect(1:n)
-    sz = ones(Int, n)
+    nbrs = Int[]
+    stack = Int[]
+    k = 0
     for i in 1:n
-        core[i] || continue
-        for j in NearestNeighbors.inrange(tree, view(X, :, i), r)
-            (j > i && core[j]) && _uf_union!(parent, sz, i, j)
+        (core[i] && labels[i] == 0) || continue
+        k += 1
+        labels[i] = k
+        push!(stack, i)
+        while !isempty(stack)
+            p = pop!(stack)
+            empty!(nbrs)
+            NearestNeighbors.inrange!(nbrs, tree, view(X, :, p), r)
+            for q in nbrs
+                labels[q] == 0 || continue
+                labels[q] = k
+                core[q] && push!(stack, q)
+            end
         end
-    end
-    rootlabel = zeros(Int, n)
-    nextlab = 0
-    for i in 1:n
-        core[i] || continue
-        rt = _uf_find(parent, i)
-        rootlabel[rt] == 0 && (nextlab += 1; rootlabel[rt] = nextlab)
-        labels[i] = rootlabel[rt]
-    end
-    Threads.@threads for i in 1:n
-        core[i] && continue
-        best = 0
-        for j in NearestNeighbors.inrange(tree, view(X, :, i), r)
-            core[j] || continue
-            lj = labels[j]
-            (best == 0 || lj < best) && (best = lj)
-        end
-        labels[i] = best
     end
     return labels
 end

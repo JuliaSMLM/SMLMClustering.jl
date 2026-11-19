@@ -52,7 +52,7 @@ Shared fields expected on every concrete subtype:
 ### `DBSCANConfig <: AbstractClusterConfig`
 
 **Source:** `src/backends/dbscan.jl`
-**Algorithm:** classical DBSCAN (Ester et al. 1996) in three passes over one KD-tree (core count, union of cores within ε, border attach); same core and border rules as `PrecisionDBSCANConfig`
+**Algorithm:** classical DBSCAN (Ester et al. 1996) in two passes over one KD-tree (threaded core count, then clusters grown from core points in index order); same core and border rules as `PrecisionDBSCANConfig`
 **Library:** NearestNeighbors.jl (KD-tree range queries)
 
 **Fields:**

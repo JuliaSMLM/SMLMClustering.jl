@@ -571,7 +571,9 @@ rule; with equal variances they are exactly the Bayes classifier.
 # Returns
 `Vector{Float64}` of length `n_regimes - 1`, sorted ascending; an end regime
 that never wins makes a threshold `-Inf` or `Inf`. Pass directly to
-`MRFDensityClusterConfig(regime_thresholds = ...)`.
+`MRFDensityClusterConfig(regime_thresholds = ...)`. If any regime is empty, a
+warning names it: with `n_regimes = 2`, a threshold of `Inf` puts every emitter in
+the lower regime and `-Inf` puts every emitter in the upper one.
 
 # Errors
 - `ArgumentError` if `n_regimes < 2`, `density_estimator` is unknown,
@@ -608,7 +610,24 @@ function calibrate_regime_thresholds(smld::SMLMData.BasicSMLD;
                                      density_k = density_k)
 
     # Bayes boundaries between consecutive (mean-sorted) components.
-    return _regime_thresholds(fit)
+    thresholds = _regime_thresholds(fit)
+    _warn_empty_regimes(thresholds, n_regimes)
+    return thresholds
+end
+
+# Regime k covers [lo_k, hi_k) with lo = [-Inf; t], hi = [t; Inf]; it is empty when
+# lo_k ≥ hi_k (an end threshold of ∓Inf, or two equal thresholds). Returns the empty
+# regimes and warns once if there are any.
+function _warn_empty_regimes(thresholds::Vector{Float64}, n_regimes::Int)
+    lo = [-Inf; thresholds]
+    hi = [thresholds; Inf]
+    empty_regimes = findall(k -> lo[k] >= hi[k], 1:n_regimes)
+    isempty(empty_regimes) ||
+        @warn "calibrate_regime_thresholds: regime(s) $(empty_regimes) of $(n_regimes) " *
+              "never have the highest weighted density in the calibration fit, so " *
+              "they receive no emitters; thresholds = $(thresholds). Try a different " *
+              "calibration ROI or fewer regimes."
+    return empty_regimes
 end
 
 # ----------------------------------------------------------------------------

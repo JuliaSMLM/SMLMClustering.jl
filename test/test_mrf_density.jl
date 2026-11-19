@@ -422,4 +422,73 @@ include(joinpath(@__DIR__, "long", "utils", "helpers.jl"))
         @test_throws ArgumentError calibrate_regime_gaussians(smld_tiny; n_regimes = 2)
     end
 
+    # Simulated scene for the exported calibration path: a uniform background in a
+    # 5 x 5 µm field plus six tight blobs.
+    function _calibration_scene(seed)
+        rng = Xoshiro(seed)
+        pts = [(5 * rand(rng), 5 * rand(rng), 1) for _ in 1:600]
+        for _ in 1:6
+            append!(pts, _blob(rng, 0.5 + 4 * rand(rng), 0.5 + 4 * rand(rng), 0.03, 60))
+        end
+        return _make_2d_smld(pts)
+    end
+
+    @testset "calibrate_regime_thresholds: the Bayes boundary of its own fit" begin
+        lwn(x, m, v, w) = log(w) - 0.5 * log(2π * v) - (x - m)^2 / (2v)
+        smld = _calibration_scene(21)
+        for est in (:knn, :voronoi)
+            fit = calibrate_regime_gaussians(smld; n_regimes = 2, density_estimator = est)
+            thr = @test_logs calibrate_regime_thresholds(smld; n_regimes = 2, density_estimator = est)
+            @test thr ≈ SMLMClustering._regime_thresholds(fit) rtol = 1e-10
+            @test length(thr) == 1 && isfinite(thr[1])
+            # The returned threshold is where the two weighted densities cross, with the
+            # lower component winning just below it and the upper just above.
+            t = thr[1]
+            d(x) = lwn(x, fit.means[1], fit.vars[1], fit.weights[1]) -
+                   lwn(x, fit.means[2], fit.vars[2], fit.weights[2])
+            @test abs(d(t)) < 1e-8
+            @test d(t - 1e-3) > 0 && d(t + 1e-3) < 0
+            # Three regimes: the same function of the three-component fit, sorted.
+            fit3 = calibrate_regime_gaussians(smld; n_regimes = 3, density_estimator = est)
+            thr3 = calibrate_regime_thresholds(smld; n_regimes = 3, density_estimator = est)
+            @test thr3 ≈ SMLMClustering._regime_thresholds(fit3) rtol = 1e-10
+            @test length(thr3) == 2 && issorted(thr3)
+        end
+    end
+
+    @testset "cluster with infinite and repeated thresholds" begin
+        smld = _calibration_scene(22)
+        n = length(smld.emitters)
+        run(K, t) = cluster(smld, MRFDensityClusterConfig(n_regimes = K, regime_thresholds = t,
+                                                          density_estimator = :knn,
+                                                          per_dataset = false))
+        counts(o, K) = [count(==(k), o.metadata["mrf_regime_per_emitter"]) for k in 1:K]
+        o, info = run(2, [-Inf])                      # every emitter in the upper regime
+        @test counts(o, 2) == [0, n]
+        o, info = run(2, [Inf])                       # every emitter in the lower regime
+        @test counts(o, 2) == [n, 0]
+        @test info.n_clusters == 0
+        t = only(calibrate_regime_thresholds(smld; n_regimes = 2))
+        o2, info2 = run(2, [t])
+        c2 = counts(o2, 2)
+        @test all(>(0), c2)
+        o3, info3 = run(3, [t, t])                    # empty middle regime
+        @test counts(o3, 3) == [c2[1], 0, c2[2]]
+        o3, _ = run(3, [-Inf, t])                     # empty lowest regime
+        @test counts(o3, 3) == [0, c2[1], c2[2]]
+        o3, _ = run(3, [t, Inf])                      # empty highest regime
+        @test counts(o3, 3) == [c2[1], c2[2], 0]
+    end
+
+    @testset "calibrate_regime_thresholds warns on an empty regime" begin
+        we = SMLMClustering._warn_empty_regimes
+        @test (@test_logs we([1.0], 2)) == Int[]
+        @test (@test_logs we([1.0, 2.0], 3)) == Int[]
+        @test (@test_logs (:warn, r"regime\(s\) \[2\] of 2") we([Inf], 2)) == [2]
+        @test (@test_logs (:warn, r"regime\(s\) \[1\] of 2") we([-Inf], 2)) == [1]
+        @test (@test_logs (:warn, r"regime\(s\) \[2\] of 3") we([1.0, 1.0], 3)) == [2]
+        @test (@test_logs (:warn, r"regime\(s\) \[1, 3\] of 3") we([-Inf, Inf], 3)) == [1, 3]
+        @test (@test_logs (:warn,) we([-Inf, -Inf], 3)) == [1, 2]
+    end
+
 end
