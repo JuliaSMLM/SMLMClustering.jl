@@ -122,7 +122,7 @@ end
 # Classical DBSCAN labels for a D×n coordinate matrix X (μm) with radius r (μm):
 # neighborhoods are d ≤ r (KD-tree `inrange`, inclusive) and include the point itself.
 # Two passes over one tree, O(n) memory (no neighbor list is kept):
-#   1. core[i] = |N(i)| ≥ min_points, by `inrangecount`     (threaded, no allocation)
+#   1. core[i] = |N(i)| ≥ min_points, by `inrangecount`     (threaded, no neighbor list)
 #   2. clusters grown in index order from each unlabeled core point: every core
 #      point reached is expanded, every unlabeled point within r of it takes the
 #      cluster's id                                          (serial, one reused buffer)
